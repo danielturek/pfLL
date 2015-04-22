@@ -1,19 +1,18 @@
 
 library(nimble)
-require(R6)
+library(R6)
 model <- 'SSMindependent'
 load(paste0('~/GitHub/autoBlock/data/model_', model, '.RData'))
 Rmodel <- nimbleModel(code, constants, data, inits)
 latent <- 'x'
 
 pfLL <- function(model, latent, param, m = 10000, rep = 1, makePlot = TRUE) {
-    require(R6)
-    require(nimble)
     pfLLobj <- pfLLClass$new()
     pfLLobj$initModel(model)
     pfLLobj$initPF(latent)
     pfLLobj$initParam(param)
-    pfLLobj$calcLL(m, rep)
+    pfLLobj$initRep(rep)
+    pfLLobj$calcLL(m)
     if(makePlot) pfLLobj$makePlot()
     pfLLobj
 }; pfLLClass <- R6Class(
@@ -44,13 +43,17 @@ pfLL <- function(model, latent, param, m = 10000, rep = 1, makePlot = TRUE) {
             if(!all(self$paramNames %in% self$Cmodel$getNodeNames(returnScalarComponents = TRUE)))
                 stop('problem with param names')
         },
+        rep = NULL,
+        initRep = function(rep) {
+            self$rep <- rep
+        },
         ll = NULL,
-        calcLL = function(m, rep) {
-            self$ll <- array(NA, c(self$nParamValues, rep))
+        calcLL = function(m) {
+            self$ll <- array(NA, c(self$nParamValues, self$rep))
             for(i in 1:self$nParamValues) {
+                cat(paste0(round((i-1)/self$nParamValues*100,0), '%\n'))
                 self$setModelParamValues(row = i)
-                print(self$Cmodel[[self$paramNames[1]]])    ## temporary testing
-                for(j in 1:rep)     self$ll[i, j] <- self$Cpf$run(m)
+                for(j in 1:self$rep)     self$ll[i, j] <- self$Cpf$run(m)
             }
         },
         setModelParamValues = function(row) {
@@ -58,16 +61,30 @@ pfLL <- function(model, latent, param, m = 10000, rep = 1, makePlot = TRUE) {
         },
         makePlot = function() {
             switch(length(self$paramNames),
-                   plot(x=rep(self$param[,1], dim(self$ll)[2]), y = self$ll, xlab=self$paramNames, ylab='log-likelihood estimate'),  ## plot for 1 param
-                   print('need to implement surface plotting')  ## plot for 2 params
+                   plot(rep(self$param[,1],self$rep),
+                        as.numeric(self$ll),
+                        xlab=self$paramNames,
+                        ylab='log-likelihood estimate'),  ## plot for 1 param
+                   { require(plot3D)
+                     scatter3D(rep(self$param[,1],self$rep),
+                               rep(self$param[,2],self$rep),
+                               as.numeric(self$ll),
+                               xlab=self$paramNames[1],
+                               ylab=self$paramNames[2],
+                               zlab='log-likelihood estimate') }  ## plot for 2 params
                    )
         }
     )
 )
 
-param <- data.frame(mu = seq(19, 21, by=0.2))
 
-pfLL(Rmodel, latent, param, rep=5)
+## 1 param
+param <- expand.grid(list(mu = seq(19, 22, by=0.2)))
+out <- pfLL(Rmodel, latent, param, rep=5, m=3000)
+
+## 2 params
+param <- expand.grid(list(mu = seq(19.6, 21, by=0.2), b = seq(-2, 5, by=1)))
+out <- pfLL(Rmodel, latent, param, rep=3, m=2000)
 
 
 
