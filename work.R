@@ -1,8 +1,8 @@
 
-
 rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
 loadData('SSMindependent')
+## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
 
 paramNodes <- c('mu')
 lower <- c(19)
@@ -12,18 +12,33 @@ paramNodes <- c('mu', 'b')
 lower <- c(19, 0)
 upper <- c(22, 10)
 
-pfLLobj <- pfLLClass$new(Rmodel, latent, paramNodes, 1000)
-set.seed(0);     pfLLobj$run(c(20.5, 1)) # 20.32805
+paramNodes <- c('mu', 'b', 'sigPN', 'sigOE')
+lower <- c(19, 0, .01, .01)
+upper <- c(22, 4, 1, 1)
 
-control <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=20)
+pfLLobj <- pfLLClass$new(Rmodel, latent, paramNodes, 5000)
+set.seed(0);     pfLLobj$run(c(20.5, 1)) # [1] 19.08656
+
+control <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=7) ##20)
 set.seed(0); system.time(out <- psoptim(paramNodes, pfLLobj$run, lower=lower, upper=upper, control=control))
-out$par    # 20.216061,  1.450972
-out$value  # -22.38359
+out$par
+out$value
+
+## > out$par
+## [1] 19.86093480  1.40952098  0.25524077  0.03847021
+## > out$value
+## [1] -13.79163
 
 trace <- extractPSOtrace(out)
-
 plotPSOtrace(trace)
 
+
+ind <- which(trace$y==-Inf)
+xbad <- trace$x[ind, ]
+
+i <- 1
+xbad[i,]
+pfLLobj$run(xbad[i,])
 
 
 
@@ -40,6 +55,7 @@ plotPSOtrace(trace)
 
 ## build & run PF
 ## Rpf <- buildPF(Rmodel, latent)
+## Cmodel <- compileNimble(Rmodel)
 ## Cpf <- compileNimble(Rpf, project = Rmodel)
 ## set.seed(0)
 ## Cpf$run(10000)

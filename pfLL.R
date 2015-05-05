@@ -22,13 +22,12 @@ replicateModel <- function(modelarg) {
 pfLLnf <- nimbleFunction(
     setup = function(model, latentNodes, paramNodes, m) {
         latentNodes <- model$expandNodeNames(latentNodes, sort = TRUE)
-        my_pf <- buildPF(model, latentNodes)
+        my_PF <- buildPF(model, latentNodes, silent = TRUE)
         if(missing(m)) m <- 10000
     },
     run = function(p = double(1)) {
         values(model, paramNodes) <- p  ## causes ref class '<<-' warning
-        ##setValues(p, model, paramNodes)
-        ll <- my_pf(m)
+        ll <- my_PF(m)
         returnType(double())
         return(ll)
     }
