@@ -4,7 +4,6 @@ require(R6)
 require(pso)
 
 loadData <- function(model) {
-    require(nimble)
     load(paste0('~/GitHub/pfLL/data/model_', model, '.RData'), envir=parent.frame())
     eval(quote(Rmodel <- nimbleModel(code, constants, data, inits)), envir = parent.frame())
 }
@@ -33,41 +32,66 @@ pfLLnf <- nimbleFunction(
     }
 )
 
+## specific for psoptim() output: extracts trace information
+extractPSOtrace <- function(out) {
+    if(is.null(out$stats)) stop("didn't record psoptim() trace")
+    x <- t(do.call(cbind, out$stats$x))
+    y <- unlist(out$stats$f) * (-1)  ## multiply by -1 to undo fnscale=-1 in psoptim()
+    ind <- (y != -Inf)  ## remove -Inf values from y
+    y <- y[ind]         ##
+    x <- x[ind,]        ##
+    list(x=x, y=y, n=dim(x)[1], p=dim(x)[2])
+}
+
+## specific for psoptim() output: 1D or 2D plots of logL estimates
+plotPSOtrace <- function(psoTrace, paramNodes) {
+    if(psoTrace$p == 1) {
+        plot(psoTrace$x[, 1], psoTrace$y, xlab=paramNodes[1], ylab='log-likelihood')
+    } else if(psoTrace$p == 2) {
+        require(plot3D)
+        scatter3D(psoTrace$x[,1], psoTrace$x[,2], psoTrace$y, xlab=paramNodes[1], ylab=paramNodes[2], zlab='log-likelihood')
+    }
+}
+
+
+
+
+pfLL <- function(...)
+    pfLLClass$new(...)
+
+
+
+## paramNodes must be vector of *scalar* nodes
 pfLLClass <- R6Class(
     'pfLLClass',
     public = list(
+        ## class variables
         Rmodel = NULL, RpfLLnf = NULL,
         Cmodel = NULL, CpfLLnf = NULL,
-        initialize = function(modelarg, latentNodes, paramNodes, m = 1000) {
+        psoOut = NULL, psoTrace = NULL,
+        ## initialize
+        initialize = function(
+            ## initialize() arguments
+            modelarg, latentNodes, paramNodes,
+            lower = rep(-Inf,length(paramNodes)), upper = rep(Inf,length(paramNodes)),
+            m = 1000, psoIt = 20, setSeed = TRUE, plot = TRUE) {
+            ## model and NF creation and compilation
             self$Rmodel <- replicateModel(modelarg)
             self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, paramNodes, m)
             self$Cmodel <- compileNimble(self$Rmodel)
             self$CpfLLnf <- compileNimble(self$RpfLLnf, project = self$Rmodel)
-        },
-        run = function(p)     self$CpfLLnf$run(p)
+            psoControl <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=psoIt)
+            ## pso optimization
+            if(setSeed) set.seed(0)
+            self$psoOut <- psoptim(paramNodes, self$CpfLLnf$run, lower=lower, upper=upper, control=psoControl)
+            self$psoTrace <- extractPSOtrace(self$psoOut)
+            if(plot) plotPSOtrace(self$psoTrace, paramNodes)
+            ##print(self$psoOut$par)        #### temporary
+            ##print(self$psoOut$value)      #### temporary
+        }
     )
 )
 
-
-## specific functions for psoptim() output
-extractPSOtrace <- function(out) {
-    if(is.null(out$stats)) stop()
-    x <- t(do.call(cbind, out$stats$x))
-    y <- unlist(out$stats$f) * (-1)  ## multiply by -1 to undo fnscale=-1 in psoptim()
-    n <- dim(x)[1]
-    p <- dim(x)[2]
-    trace <- list(x=x, y=y, n=n, p=p)
-    return(trace)
-}
-
-plotPSOtrace <- function(trace) {
-    if(trace$p == 1) {               ## plot for 1 param
-        plot(trace$x[, 1], trace$y, xlab='', ylab='log-likelihood')
-    } else if(trace$p == 2) {        ## plot for 2 params
-        require(plot3D)
-        scatter3D(trace$x[,1], trace$x[,2], trace$y, xlab='', ylab='', zlab='log-likelihood')
-    }
-}
 
 
 
@@ -75,7 +99,6 @@ plotPSOtrace <- function(trace) {
 ## original version
 ## good 2D & 3D plotting stuff
 
-## require(R6)
 ## pfLL <- function(model, latent, param, m = 10000, rep = 1, makePlot = TRUE) {
 ##     pfLLobj <- pfLLClass$new()
 ##     pfLLobj$initModel(model)

@@ -7,38 +7,26 @@ loadData('SSMindependent')
 paramNodes <- c('mu')
 lower <- c(19)
 upper <- c(22)
+## [1] 20.11637
+## [1] -21.22038
 
 paramNodes <- c('mu', 'b')
 lower <- c(19, 0)
 upper <- c(22, 10)
+## [1] 20.142429  2.255136
+## [1] -21.04907
 
 paramNodes <- c('mu', 'b', 'sigPN', 'sigOE')
 lower <- c(19, 0, .01, .01)
 upper <- c(22, 4, 1, 1)
-
-pfLLobj <- pfLLClass$new(Rmodel, latent, paramNodes, 5000)
-set.seed(0);     pfLLobj$run(c(20.5, 1)) # [1] 19.08656
-
-control <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=7) ##20)
-set.seed(0); system.time(out <- psoptim(paramNodes, pfLLobj$run, lower=lower, upper=upper, control=control))
-out$par
-out$value
-
-## > out$par
 ## [1] 19.86093480  1.40952098  0.25524077  0.03847021
-## > out$value
 ## [1] -13.79163
 
-trace <- extractPSOtrace(out)
-plotPSOtrace(trace)
+pfLLobj <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=7)
 
 
-ind <- which(trace$y==-Inf)
-xbad <- trace$x[ind, ]
 
-i <- 1
-xbad[i,]
-pfLLobj$run(xbad[i,])
+
 
 
 
