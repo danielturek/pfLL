@@ -22,12 +22,18 @@ upper <- c(22, 4, 1, 1)
 ## [1] 19.86093480  1.40952098  0.25524077  0.03847021
 ## [1] -13.79163
 
-pfLLobj <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=7)
+pfLLobj <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=3)#7)
 
+if(FALSE) {
+    print(pfLLobj$psoOut$par); print(pfLLobj$psoOut$value)
+}
 
-
-
-
+## now write some spline fitting!!!!
+x <- pfLLobj$psoTrace$x
+y <- pfLLobj$psoTrace$y
+n <- pfLLobj$psoTrace$n
+p <- pfLLobj$psoTrace$p
+require(mgcv)
 
 
 

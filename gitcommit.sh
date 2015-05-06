@@ -2,6 +2,6 @@
 
 git pull
 git add --all
-git commit -a -m'working on pfLL'
-git push
+git commit -m\"`$@`\"
+#git push
 

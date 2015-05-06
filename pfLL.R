@@ -37,9 +37,9 @@ extractPSOtrace <- function(out) {
     if(is.null(out$stats)) stop("didn't record psoptim() trace")
     x <- t(do.call(cbind, out$stats$x))
     y <- unlist(out$stats$f) * (-1)  ## multiply by -1 to undo fnscale=-1 in psoptim()
-    ind <- (y != -Inf)  ## remove -Inf values from y
-    y <- y[ind]         ##
-    x <- x[ind,]        ##
+    ind <- (y != -Inf)         ## remove -Inf values from y
+    y <- y[ind]                ##
+    x <- x[ind, , drop=FALSE]  ## (drop=FALSE needed for 1D case!)
     list(x=x, y=y, n=dim(x)[1], p=dim(x)[2])
 }
 
@@ -86,8 +86,6 @@ pfLLClass <- R6Class(
             self$psoOut <- psoptim(paramNodes, self$CpfLLnf$run, lower=lower, upper=upper, control=psoControl)
             self$psoTrace <- extractPSOtrace(self$psoOut)
             if(plot) plotPSOtrace(self$psoTrace, paramNodes)
-            ##print(self$psoOut$par)        #### temporary
-            ##print(self$psoOut$value)      #### temporary
         }
     )
 )
