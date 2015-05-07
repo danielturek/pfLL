@@ -25,67 +25,75 @@ pfLLnf <- nimbleFunction(
         if(missing(m)) m <- 10000
     },
     run = function(p = double(1)) {
-        values(model, paramNodes) <- p  ## causes ref class '<<-' warning
+        values(model, paramNodes) <<- p
         ll <- my_PF(m)
         returnType(double())
         return(ll)
     }
 )
 
-## specific for psoptim() output: extracts trace information
-extractPSOtrace <- function(out) {
-    if(is.null(out$stats)) stop("didn't record psoptim() trace")
-    x <- t(do.call(cbind, out$stats$x))
-    y <- unlist(out$stats$f) * (-1)  ## multiply by -1 to undo fnscale=-1 in psoptim()
-    ind <- (y != -Inf)         ## remove -Inf values from y
-    y <- y[ind]                ##
-    x <- x[ind, , drop=FALSE]  ## (drop=FALSE needed for 1D case!)
-    list(x=x, y=y, n=dim(x)[1], p=dim(x)[2])
-}
-
-## specific for psoptim() output: 1D or 2D plots of logL estimates
-plotPSOtrace <- function(psoTrace, paramNodes) {
-    if(psoTrace$p == 1) {
-        plot(psoTrace$x[, 1], psoTrace$y, xlab=paramNodes[1], ylab='log-likelihood')
-    } else if(psoTrace$p == 2) {
-        require(plot3D)
-        scatter3D(psoTrace$x[,1], psoTrace$x[,2], psoTrace$y, xlab=paramNodes[1], ylab=paramNodes[2], zlab='log-likelihood')
-    }
-}
-
-
 
 
 pfLL <- function(...)
     pfLLClass$new(...)
 
-
-
 ## paramNodes must be vector of *scalar* nodes
 pfLLClass <- R6Class(
     'pfLLClass',
     public = list(
-        ## class variables
+        paramNodes = NULL, p = NULL,
         Rmodel = NULL, RpfLLnf = NULL,
         Cmodel = NULL, CpfLLnf = NULL,
         psoOut = NULL, psoTrace = NULL,
-        ## initialize
+        quadLM = NULL,
         initialize = function(
-            ## initialize() arguments
             modelarg, latentNodes, paramNodes,
             lower = rep(-Inf,length(paramNodes)), upper = rep(Inf,length(paramNodes)),
             m = 1000, psoIt = 20, setSeed = TRUE, plot = TRUE) {
-            ## model and NF creation and compilation
+            self$paramNodes <- paramNodes
+            self$p <- length(self$paramNodes)
             self$Rmodel <- replicateModel(modelarg)
-            self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, paramNodes, m)
+            self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, self$paramNodes, m)
             self$Cmodel <- compileNimble(self$Rmodel)
             self$CpfLLnf <- compileNimble(self$RpfLLnf, project = self$Rmodel)
             psoControl <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=psoIt)
-            ## pso optimization
             if(setSeed) set.seed(0)
-            self$psoOut <- psoptim(paramNodes, self$CpfLLnf$run, lower=lower, upper=upper, control=psoControl)
-            self$psoTrace <- extractPSOtrace(self$psoOut)
-            if(plot) plotPSOtrace(self$psoTrace, paramNodes)
+            self$psoOut <- psoptim(self$paramNodes, self$CpfLLnf$run, lower=lower, upper=upper, control=psoControl)
+            self$extractPSOtrace()
+            self$fitQuadraticLM()
+            print(summary(self$quadLM))
+            if(plot) self$plotPSOtrace()  ## plot 1D, 2D cases only
+            self$Rmodel <- self$Cmodel <- self$RpfLLnf <- self$CpfLLnf <- NULL  ## cleanup
+        },
+        extractPSOtrace = function() {
+            if(is.null(self$psoOut$stats)) stop("didn't record psoptim() trace")
+            x <- t(do.call(cbind, self$psoOut$stats$x))
+            colnames(x) <- self$paramNodes
+            y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
+            x <- x[(y != -Inf), , drop=FALSE]  ## drop=FALSE needed for 1D case
+            y <- y[(y != -Inf)]                ## remove -Inf values from y
+            self$psoTrace <- list(x=x, y=y)
+        },
+        fitQuadraticLM = function() {
+            xs <- paste0('x[, ', 1:self$p, ']')
+            xterms <- c(self$paramNodes,
+                        paste0('I(', self$paramNodes, '^2)'),
+                        if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character()
+                        )
+            form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
+            df <- as.data.frame(cbind(self$psoTrace$x, y = self$psoTrace$y))
+            self$quadLM <- lm(form, data = df)
+        },
+        plotPSOtrace = function() {
+            if(self$p == 1) {
+                plot(self$psoTrace$x[, 1], self$psoTrace$y, xlab=self$paramNodes[1], ylab='log-likelihood')
+                sortedX <- sort(self$psoTrace$x[, 1], index.return = TRUE)
+                lines(sortedX$x, predict(self$quadLM)[sortedX$ix], col='red')
+            } else if(self$p == 2) {
+                require(plot3D)
+                scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], self$psoTrace$y, xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood')
+                scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], predict(self$quadLM), xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood', add=TRUE, pch=18)
+            }
         }
     )
 )

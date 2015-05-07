@@ -4,36 +4,46 @@ source('~/GitHub/pfLL/pfLL.R')
 loadData('SSMindependent')
 ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
 
-paramNodes <- c('mu')
-lower <- c(19)
-upper <- c(22)
+
+paramNodes <- c('mu'); lower <- c(19); upper <- c(22)
+## psoIt = 3
 ## [1] 20.11637
 ## [1] -21.22038
+## Multiple R-squared:  0.9222,	Adjusted R-squared:  0.9175
 
-paramNodes <- c('mu', 'b')
-lower <- c(19, 0)
-upper <- c(22, 10)
+paramNodes <- c('mu','b'); lower <- c(19,0); upper <- c(22,10)
+## psoIt = 3
 ## [1] 20.142429  2.255136
 ## [1] -21.04907
+## Multiple R-squared:  0.7848,	Adjusted R-squared:  0.7489
 
-paramNodes <- c('mu', 'b', 'sigPN', 'sigOE')
-lower <- c(19, 0, .01, .01)
-upper <- c(22, 4, 1, 1)
-## [1] 19.86093480  1.40952098  0.25524077  0.03847021
-## [1] -13.79163
+paramNodes <- c('mu','b','sigPN','sigOE'); lower <- c(19,0,.01,.01); upper <- c(22,4,1,1)
+## psoIt = 3
+## [1] 19.1654744  0.9124417  0.2935520  0.1689781
+## [1] 12.74345
+## Multiple R-squared:  0.6636,	Adjusted R-squared:  0.4825
+## psoIt = 50:
+## [1] 20.08460637  1.84003807  0.18720946  0.02067147
+## [1] -23.55684
+## Multiple R-squared:  0.1718,	Adjusted R-squared:  0.1547
 
-pfLLobj <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=3)#7)
 
-if(FALSE) {
-    print(pfLLobj$psoOut$par); print(pfLLobj$psoOut$value)
-}
+self <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=50)
+print(self$psoOut$par); print(self$psoOut$value)
+
+
 
 ## now write some spline fitting!!!!
-x <- pfLLobj$psoTrace$x
-y <- pfLLobj$psoTrace$y
-n <- pfLLobj$psoTrace$n
-p <- pfLLobj$psoTrace$p
+
+x <- self$psoTrace$x
+y <- self$psoTrace$y
+n <- self$psoTrace$n
+p <- self$psoTrace$p
+paramNodes
 require(mgcv)
+
+
+
 
 
 
