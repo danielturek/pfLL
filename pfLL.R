@@ -1,7 +1,8 @@
 
 require(nimble)
 require(R6)
-require(pso)
+require(pso)  ## particle swarm optimization psoptim()
+library(grDevices)  ## convex hull chull()
 
 loadData <- function(model) {
     load(paste0('~/GitHub/pfLL/data/model_', model, '.RData'), envir=parent.frame())
@@ -44,12 +45,12 @@ pfLLClass <- R6Class(
         paramNodes = NULL, p = NULL,
         Rmodel = NULL, RpfLLnf = NULL,
         Cmodel = NULL, CpfLLnf = NULL,
-        psoOut = NULL, psoTrace = NULL,
+        psoOut = NULL, x = NULL, y = NULL,
         quadLM = NULL,
         initialize = function(
             modelarg, latentNodes, paramNodes,
             lower = rep(-Inf,length(paramNodes)), upper = rep(Inf,length(paramNodes)),
-            m = 1000, psoIt = 20, setSeed = TRUE, plot = TRUE) {
+            m = 1000, psoIt = 20, trunc = 0.8, setSeed = TRUE, plot = TRUE) {
             self$paramNodes <- paramNodes
             self$p <- length(self$paramNodes)
             self$Rmodel <- replicateModel(modelarg)
@@ -59,20 +60,24 @@ pfLLClass <- R6Class(
             psoControl <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=psoIt)
             if(setSeed) set.seed(0)
             self$psoOut <- psoptim(self$paramNodes, self$CpfLLnf$run, lower=lower, upper=upper, control=psoControl)
-            self$extractPSOtrace()
+            self$extractPSOtrace(trunc)
             self$fitQuadraticLM()
             print(summary(self$quadLM))
             if(plot) self$plotPSOtrace()  ## plot 1D, 2D cases only
             self$Rmodel <- self$Cmodel <- self$RpfLLnf <- self$CpfLLnf <- NULL  ## cleanup
         },
-        extractPSOtrace = function() {
+        extractPSOtrace = function(trunc) {
             if(is.null(self$psoOut$stats)) stop("didn't record psoptim() trace")
             x <- t(do.call(cbind, self$psoOut$stats$x))
             colnames(x) <- self$paramNodes
             y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
             x <- x[(y != -Inf), , drop=FALSE]  ## drop=FALSE needed for 1D case
             y <- y[(y != -Inf)]                ## remove -Inf values from y
-            self$psoTrace <- list(x=x, y=y)
+            if(trunc < 0 | trunc > 1) stop('bad value of trunc')
+            minY <- quantile(y, 1-trunc)
+            x <- x[(y > minY), , drop = FALSE]
+            y <- y[(y > minY)]
+            self$x <- x;     self$y <- y
         },
         fitQuadraticLM = function() {
             xs <- paste0('x[, ', 1:self$p, ']')
@@ -81,24 +86,43 @@ pfLLClass <- R6Class(
                         if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character()
                         )
             form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
-            df <- as.data.frame(cbind(self$psoTrace$x, y = self$psoTrace$y))
+            df <- as.data.frame(cbind(self$x, y = self$y))
             self$quadLM <- lm(form, data = df)
         },
         plotPSOtrace = function() {
-            if(self$p == 1) {
-                plot(self$psoTrace$x[, 1], self$psoTrace$y, xlab=self$paramNodes[1], ylab='log-likelihood')
-                sortedX <- sort(self$psoTrace$x[, 1], index.return = TRUE)
-                lines(sortedX$x, predict(self$quadLM)[sortedX$ix], col='red')
-            } else if(self$p == 2) {
-                require(plot3D)
-                scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], self$psoTrace$y, xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood')
-                scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], predict(self$quadLM), xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood', add=TRUE, pch=18)
+            yPred <- as.numeric(predict(self$quadLM))
+            numCol <- if(self$p == 1) 1 else if(self$p < 7) 2 else if(self$p < 13) 3 else 4
+            numRow <- floor((self$p-1)/numCol) + 1
+            par(mfrow = c(numRow, numCol))
+            for(iParam in 1:self$p) {
+                plot(self$x[,iParam], self$y, xlab=self$paramNodes[iParam], ylab='log-likelihood')
+                sortedX <- sort(self$x[,iParam], index.return = TRUE)
+                thisX <- sortedX$x; thisY <- yPred[sortedX$ix]
+                points(thisX, thisY, col='blue', pch=4)
+                hullInd <- chull(thisX, thisY)
+                while(hullInd[1]!=min(hullInd)) hullInd <- c(hullInd[2:length(hullInd)], hullInd[1])
+                hullInd <- hullInd[1:which(hullInd==max(hullInd))]
+                hullX <- thisX[hullInd]; hullY <- thisY[hullInd]
+                lines(hullX, hullY, col='red', lwd=2)
             }
         }
     )
 )
 
 
+
+
+## second version of the plotting code
+##
+## if(self$p == 1) {
+##     plot(self$x[, 1], self$y, xlab=self$paramNodes[1], ylab='log-likelihood')
+##     sortedX <- sort(self$x[, 1], index.return = TRUE)
+##     lines(sortedX$x, predict(self$quadLM)[sortedX$ix], col='red')
+## } else if(self$p == 2) {
+##     require(plot3D)
+##     scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], self$psoTrace$y, xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood')
+##     scatter3D(self$psoTrace$x[,1], self$psoTrace$x[,2], predict(self$quadLM), xlab=self$paramNodes[1], ylab=self$paramNodes[2], zlab='log-likelihood', add=TRUE, pch=18)
+## }
 
 
 

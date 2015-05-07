@@ -6,40 +6,42 @@ loadData('SSMindependent')
 
 
 paramNodes <- c('mu'); lower <- c(19); upper <- c(22)
-## psoIt = 3
-## [1] 20.11637
-## [1] -21.22038
-## Multiple R-squared:  0.9222,	Adjusted R-squared:  0.9175
 
-paramNodes <- c('mu','b'); lower <- c(19,0); upper <- c(22,10)
-## psoIt = 3
-## [1] 20.142429  2.255136
-## [1] -21.04907
-## Multiple R-squared:  0.7848,	Adjusted R-squared:  0.7489
+paramNodes <- c('mu','b'); lower <- c(19,-10); upper <- c(22,10)
 
-paramNodes <- c('mu','b','sigPN','sigOE'); lower <- c(19,0,.01,.01); upper <- c(22,4,1,1)
-## psoIt = 3
-## [1] 19.1654744  0.9124417  0.2935520  0.1689781
-## [1] 12.74345
-## Multiple R-squared:  0.6636,	Adjusted R-squared:  0.4825
-## psoIt = 50:
-## [1] 20.08460637  1.84003807  0.18720946  0.02067147
-## [1] -23.55684
-## Multiple R-squared:  0.1718,	Adjusted R-squared:  0.1547
+paramNodes <- c('mu','b','sigPN','sigOE'); lower <- c(19,-10,.01,.01); upper <- c(22,4,1,1)
+## psoIt = 20:
+## [1] 20.18847064  1.56384181  0.20058355  0.02346878
+## [1] -22.13378
 
-
-self <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=50)
+self <- pfLL(Rmodel, latent, paramNodes, lower, upper, m=5000, psoIt=20)
 print(self$psoOut$par); print(self$psoOut$value)
 
 
 
-## now write some spline fitting!!!!
 
-x <- self$psoTrace$x
-y <- self$psoTrace$y
-n <- self$psoTrace$n
-p <- self$psoTrace$p
-paramNodes
+
+yPred <- as.numeric(predict(self$quadLM))
+
+
+
+iParam <- 4
+
+plot(self$x[,iParam], self$y, xlab=self$paramNodes[iParam], ylab='log-likelihood')
+sortedX <- sort(self$x[,iParam], index.return = TRUE)
+thisX <- sortedX$x
+thisY <- yPred[sortedX$ix]
+lines(thisX, thisY, col='blue')
+hullInd <- chull(thisX, thisY)
+while(hullInd[1]!=min(hullInd)) hullInd <- c(hullInd[2:length(hullInd)], hullInd[1])
+hullInd <- hullInd[1:which(hullInd==max(hullInd))]
+hullX <- thisX[hullInd]
+hullY <- thisY[hullInd]
+lines(hullX, hullY, col='red', lwd=2)
+
+
+
+## now write some spline fitting!!!!
 require(mgcv)
 
 
