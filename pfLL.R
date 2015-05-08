@@ -1,7 +1,9 @@
 
+require(igraph)
 require(nimble)
 require(R6)
 require(pso)        ## particle swarm optimization psoptim()
+require(mgcv)       ## generalized additive model fitting gam()
 library(grDevices)  ## convex hull chull()
 
 loadData <- function(model) {
@@ -71,7 +73,10 @@ pfLLClass <- R6Class(
     public = list(
         paramNodes = NULL, p = NULL, trans = NULL,
         Rmodel = NULL, RpfLLnf = NULL, Cmodel = NULL, CpfLLnf = NULL, Ctrans = NULL,
-        psoOut = NULL, x = NULL, y = NULL, quadLM = NULL, optimOut = NULL, max = NULL,
+        psoOut = NULL, x = NULL, y = NULL,
+        ## quadLM = NULL,
+        GAM = NULL,
+        optimOut = NULL, max = NULL,
         initialize = function(
             modelarg, latentNodes, paramNodes,
             lower = rep(-Inf, length(paramNodes)), upper = rep(Inf, length(paramNodes)), trans,
@@ -80,7 +85,8 @@ pfLLClass <- R6Class(
             self$createNimbleObjects(modelarg, latentNodes, m)
             self$runPSOptim(lower, upper, psoIt, setSeed)
             self$extractTrace(trunc)
-            self$fitQuadraticLM()
+            ##self$fitQuadraticLM()
+            self$fitGAM()
             self$runSurfaceOptim()
             if(plot) self$plot()
             self$cleanup()
@@ -117,39 +123,51 @@ pfLLClass <- R6Class(
             x <- x[(y > minY), , drop = FALSE];   y <- y[(y > minY)]
             self$x <- x;                          self$y <- y
         },
-        fitQuadraticLM = function() {
-            xs <- paste0('x[, ', 1:self$p, ']')
-            xterms <- c(self$paramNodes, paste0('I(', self$paramNodes, '^2)'), if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character())
-            form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
-            df <- as.data.frame(cbind(self$x, y = self$y))
-            self$quadLM <- lm(form, data = df)
-            print(summary(self$quadLM))
+        ## fitQuadraticLM = function() {
+        ##     xterms <- c(self$paramNodes, paste0('I(', self$paramNodes, '^2)'), if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character())
+        ##     form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
+        ##     df <- as.data.frame(cbind(self$x, y = self$y))
+        ##     self$quadLM <- lm(form, data = df)
+        ##     print(summary(self$quadLM))
+        ## },
+        fitGAM = function() {
+            kMax <- min(floor(length(self$y)^(1/self$p)), 6)
+            if(kMax < 3) stop('Need more data to fit GAM; increase psoIt argument')
+            form <- as.formula(paste0('y ~ te(', paste0(self$paramNodes, collapse=', '), ', k = ', kMax,')'))
+            self$GAM <- gam(form, data = as.data.frame(cbind(self$x, y=self$y)))
+            if(self$p == 2)     { dev.new();   plot(self$GAM) }
         },
         optimFxn = function(vals) {
+            ## IMPORTANT: restrict fitted model predictions to within the range of x
+            rng <- apply(self$x, 2, range)
+            if(any(vals < rng[1, ])) return(-Inf)
+            if(any(vals > rng[2, ])) return(-Inf)
             df <- data.frame(as.list(vals))
             names(df) <- self$paramNodes
-            as.numeric(predict(self$quadLM, df))    
+            ##as.numeric(predict(self$quadLM, df))
+            as.numeric(predict(self$GAM, df))
         },
         runSurfaceOptim = function() {
             if(self$p == 1) {
                 self$optimOut <- optimize(self$optimFxn, range(self$x), maximum=TRUE)
-                paramT <- self$optimOut$maximum; hessianT <- NULL; logL <- self$optimOut$objective
+                paramT <- self$optimOut$maximum; logL <- self$optimOut$objective
             } else {
-                self$optimOut <- optim(self$psoOut$par, self$optimFxn, control=list(fnscale=-1), hessian=TRUE)
+                self$optimOut <- optim(self$psoOut$par, self$optimFxn, control=list(fnscale=-1))
                 if(self$optimOut$convergence != 0)   warning('optim() failed to converge')
-                paramT <- self$optimOut$par; hessianT <- self$optimOut$hessian; logL <- self$optimOut$value
+                paramT <- self$optimOut$par;     logL <- self$optimOut$value
             }
             param <- self$Ctrans$run(paramT, 1)
             names(param) <- self$paramNodes;   names(paramT) <- paste0(self$paramNodes, 'T')
-            self$max <- list(param=param, paramT=paramT, hessianT=hessianT, logL=logL)
-            cat('MLE parameter values:\n');   print(self$max$param)
-            cat('Maximized log-likelihood:\n');   print(self$max$logL)
+            self$max <- list(param=param, paramT=paramT, logL=logL)
+            cat('Fitted surface peak location:\n');       print(self$max$param)
+            cat('Fitted surface peak value (log-likelihood):\n');   print(self$max$logL)
         },
         plot = function() {
-            yPred <- as.numeric(predict(self$quadLM))
+            ##yPred <- as.numeric(predict(self$quadLM))
+            yPred <- as.numeric(predict(self$GAM))
             numCol <- if(self$p == 1) 1 else if(self$p < 7) 2 else if(self$p < 13) 3 else 4
             numRow <- floor((self$p-1)/numCol) + 1
-            par(mfrow = c(numRow, numCol))
+            dev.new(); par(mfrow = c(numRow, numCol))
             for(iParam in 1:self$p) {
                 xlab <- if(self$trans[iParam]=='identity') self$paramNodes[iParam] else paste0(self$trans[iParam],'(',self$paramNodes[iParam],')')
                 ylim <- c(min(self$y), max(c(self$y, yPred)))
@@ -171,33 +189,11 @@ pfLLClass <- R6Class(
 )
 
 
-
-
-
-mvn_ll <- function(d) {
-    require(mvtnorm)
-    mu <- d$mu
-    a <- d$a
-    b <- mu*(1-a)
-    sigPN <- d$sigPN
-    sigPN2 <- sigPN*sigPN
-    sigOE <- d$sigOE
-    sigOE2 <- sigOE*sigOE
-    y <- d$y
-    t <- d$t
-    mu_vec <- rep( b/(1-a), t)
-    cov_mat <- matrix(nrow = t, ncol = t)
-    var_x <- sigPN2 / (1-a^2)
-    var_y <- var_x + sigOE2
-    diag(cov_mat) <- var_y
-    for(i in 2:t) {
-        for(j in 1:(i-1)) {
-            cov_mat[i,j] <- (a^(i-j))*var_x
-            cov_mat[j,i] <- cov_mat[i,j]
-        }
-    }
-    dmvnorm(y, mu_vec, cov_mat, log = TRUE)
-}
+## NOTES:
+## removing -Inf values from y
+## truncating y to 80%
+## kMax for gam() set to 4 to avoid over-fitting
+## restrict gam() model predictions to within range of x
 
 KF_ll <- function(d) {
     mu <- d$mu
