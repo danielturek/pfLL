@@ -4,7 +4,8 @@ require(nimble)
 require(R6)
 require(pso)        ## particle swarm optimization psoptim()
 require(mgcv)       ## generalized additive model fitting gam()
-library(grDevices)  ## convex hull chull()
+require(grDevices)  ## convex hull chull()
+require(geometry)   ## multidimensional convex hull and search
 
 loadData <- function(model) {
     load(paste0('~/GitHub/pfLL/data/model_', model, '.RData'), envir=parent.frame())
@@ -49,20 +50,41 @@ transNF <- nimbleFunction(
 ## runtime argument of param values are on *transformed* scales
 ## paramNodes must be vector of *scalar* nodes
 pfLLnf <- nimbleFunction(
-    setup = function(model, latentNodes, paramNodes, trans, m) {
+    setup = function(model, latentNodes, paramNodes, trans, p, m) {
         latentNodes <- model$expandNodeNames(latentNodes, sort = TRUE)
         my_trans <- transNF(trans)
         my_PF <- buildPF(model, latentNodes, silent = TRUE)
         if(missing(m)) m <- 10000
+        cur <- 0
+        max <- increment <- 1000  ## must be > 1
+        x <- array(as.numeric(NA), c(increment, p))
+        y <- v <- rep(as.numeric(NA), increment)
     },
     run = function(transformedVals = double(1)) {
+        cur <<- cur + 1
+        if(cur > max) {
+            print('ERROR: bugs in setSize(), this will fail!  Github issues #57, #58')
+            max <<- max + increment
+            setSize(x, max, p)
+            setSize(y, max)
+            setSize(v, max)
+        }
         vals <- my_trans(transformedVals, 1)
         values(model, paramNodes) <<- vals
-        ll <- my_PF(m)
+        ll <- my_PF$run(m)
+        x[cur, 1:p] <<- transformedVals
+        y[cur]      <<- ll
+        v[cur]      <<- my_PF$getVarLL()
         returnType(double())
         return(ll)
-    }
+    },
+    methods = list(
+        getX = function() { returnType(double(2)); return(x[1:cur, 1:p]) },
+        getY = function() { returnType(double(1)); return(y[1:cur])      },
+        getV = function() { returnType(double(1)); return(v[1:cur])      }
+    )
 )
+
 
 pfLL <- function(...)
     pfLLClass$new(...)
@@ -73,20 +95,17 @@ pfLLClass <- R6Class(
     public = list(
         paramNodes = NULL, p = NULL, trans = NULL,
         Rmodel = NULL, RpfLLnf = NULL, Cmodel = NULL, CpfLLnf = NULL, Ctrans = NULL,
-        psoOut = NULL, x = NULL, y = NULL,
-        ## quadLM = NULL,
-        GAM = NULL,
-        optimOut = NULL, max = NULL,
+        psoOut = NULL, x = NULL, xRng = NULL, y = NULL, v = NULL,
+        fittedModel = NULL, optimOut = NULL, max = NULL,
         initialize = function(
             modelarg, latentNodes, paramNodes,
             lower = rep(-Inf, length(paramNodes)), upper = rep(Inf, length(paramNodes)), trans,
-            m = 1000, psoIt = 20, trunc = 0.8, setSeed = TRUE, plot = TRUE) {
+            m = 1000, psoIt = 20, trunc = 0.99, setSeed = TRUE, plot = TRUE) {
             self$processParamArgs(paramNodes, trans)
             self$createNimbleObjects(modelarg, latentNodes, m)
             self$runPSOptim(lower, upper, psoIt, setSeed)
             self$extractTrace(trunc)
-            ##self$fitQuadraticLM()
-            self$fitGAM()
+            self$fitModel('quadLM')
             self$runSurfaceOptim()
             if(plot) self$plot()
             self$cleanup()
@@ -102,50 +121,52 @@ pfLLClass <- R6Class(
         },
         createNimbleObjects = function(modelarg, latentNodes, m) {
             self$Rmodel <- replicateModel(modelarg)
-            self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, self$paramNodes, self$trans, m)
+            self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, self$paramNodes, self$trans, self$p, m)
             self$Cmodel <- compileNimble(self$Rmodel)
             self$CpfLLnf <- compileNimble(self$RpfLLnf, project = self$Rmodel)
             self$Ctrans <- self$CpfLLnf$my_trans
         },
         runPSOptim = function(lower, upper, psoIt, setSeed) {
             tLower <- self$Ctrans$run(lower, 0);   tUpper <- self$Ctrans$run(upper, 0)
-            psoControl <- list(fnscale=-1, trace=1, trace.stats=TRUE, REPORT=1, vectorize=TRUE, maxit=psoIt)
+            psoControl <- list(fnscale=-1, trace=1, REPORT=1, vectorize=TRUE, maxit=psoIt)
             if(setSeed) set.seed(0)
             self$psoOut <- psoptim(self$paramNodes, self$CpfLLnf$run, lower=tLower, upper=tUpper, control=psoControl)
         },
         extractTrace = function(trunc) {
-            x <- t(do.call(cbind, self$psoOut$stats$x))
+            ##x <- t(do.call(cbind, self$psoOut$stats$x))
+            ##y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
+            x <- self$CpfLLnf$getX(); y <- self$CpfLLnf$getY(); v <- self$CpfLLnf$getV()
             colnames(x) <- self$paramNodes
-            y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
-            x <- x[(y != -Inf), , drop=FALSE];    y <- y[(y != -Inf)]   ## remove -Inf from y
-            if(trunc < 0 | trunc > 1) stop('bad value of trunc')
-            minY <- quantile(y, 1-trunc)
-            x <- x[(y > minY), , drop = FALSE];   y <- y[(y > minY)]
-            self$x <- x;                          self$y <- y
+            ind <- 2*(max(y)-y) < qchisq(trunc, self$p)  ## indicies of logL within trunc CI
+            xTemp <- x[ind,,drop=FALSE]    ## x values corresponding to these logL's
+            if(self$p == 1) { keepInd <- (x[,1] >= range(xTemp)[1]) & (x[,1] <= range(xTemp)[2])
+            } else { keepAr <- tsearchn(xTemp, delaunayn(xTemp), x)   ## p-dim convex hull
+                     keepInd <- !is.na(keepAr$idx)                  }
+            x <- x[keepInd,,drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
+            self$x <- x;   self$xRng <- apply(self$x,2,range);   self$y <- y;  self$v <- v
         },
-        ## fitQuadraticLM = function() {
-        ##     xterms <- c(self$paramNodes, paste0('I(', self$paramNodes, '^2)'), if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character())
-        ##     form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
-        ##     df <- as.data.frame(cbind(self$x, y = self$y))
-        ##     self$quadLM <- lm(form, data = df)
-        ##     print(summary(self$quadLM))
-        ## },
-        fitGAM = function() {
-            kMax <- min(floor(length(self$y)^(1/self$p)), 6)
-            if(kMax < 3) stop('Need more data to fit GAM; increase psoIt argument')
-            form <- as.formula(paste0('y ~ te(', paste0(self$paramNodes, collapse=', '), ', k = ', kMax,')'))
-            self$GAM <- gam(form, data = as.data.frame(cbind(self$x, y=self$y)))
-            if(self$p == 2)     { dev.new();   plot(self$GAM) }
+        fitModel = function(model) {
+            if(model == 'quadLM') {
+                xterms <- c(self$paramNodes, paste0('I(', self$paramNodes, '^2)'), if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character())
+                form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
+                df <- as.data.frame(cbind(self$x, y = self$y))
+                self$fittedModel <- lm(form, weights = 1/self$v, data = df)
+                print(summary(self$fittedModel))
+            } else if(model == 'GAM') {
+                kMax <- min(floor(length(self$y)^(1/self$p)), 6)
+                if(kMax < 3) stop('Need more data to fit GAM; increase psoIt argument')
+                form <- as.formula(paste0('y ~ te(', paste0(self$paramNodes, collapse=', '), ', k = ', kMax,')'))
+                df <- as.data.frame(cbind(self$x, y = self$y))
+                self$fittedModel <- gam(form, weights = 1/self$v, data = df)
+                if(self$p == 2)     { dev.new();   plot(self$fittedModel) }
+            } else stop('unknown model')
         },
         optimFxn = function(vals) {
-            ## IMPORTANT: restrict fitted model predictions to within the range of x
-            rng <- apply(self$x, 2, range)
-            if(any(vals < rng[1, ])) return(-Inf)
-            if(any(vals > rng[2, ])) return(-Inf)
+            if(any(vals < self$xRng[1, ])) return(-Inf)  ## restrict predictions to
+            if(any(vals > self$xRng[2, ])) return(-Inf)  ## the range of x
             df <- data.frame(as.list(vals))
             names(df) <- self$paramNodes
-            ##as.numeric(predict(self$quadLM, df))
-            as.numeric(predict(self$GAM, df))
+            as.numeric(predict(self$fittedModel, df))
         },
         runSurfaceOptim = function() {
             if(self$p == 1) {
@@ -160,11 +181,10 @@ pfLLClass <- R6Class(
             names(param) <- self$paramNodes;   names(paramT) <- paste0(self$paramNodes, 'T')
             self$max <- list(param=param, paramT=paramT, logL=logL)
             cat('Fitted surface peak location:\n');       print(self$max$param)
-            cat('Fitted surface peak value (log-likelihood):\n');   print(self$max$logL)
+            cat('Fitted surface peak value:\n');          print(self$max$logL)
         },
         plot = function() {
-            ##yPred <- as.numeric(predict(self$quadLM))
-            yPred <- as.numeric(predict(self$GAM))
+            yPred <- as.numeric(predict(self$fittedModel))
             numCol <- if(self$p == 1) 1 else if(self$p < 7) 2 else if(self$p < 13) 3 else 4
             numRow <- floor((self$p-1)/numCol) + 1
             dev.new(); par(mfrow = c(numRow, numCol))
@@ -191,7 +211,13 @@ pfLLClass <- R6Class(
 
 ## NOTES:
 ## removing -Inf values from y
-## truncating y to 80%
+## truncating y 99% profile-likelihood CI
+## then also keeping x & y pairs inside the resulting p-dim convex hull
+## estimating SE of PF predictions, using as 'weights' for lm()
+## restricting model predictions to inside the same p-dim convex hull
+
+## deprecated:
+## truncating y to top 80%
 ## kMax for gam() set to 4 to avoid over-fitting
 ## restrict gam() model predictions to within range of x
 
