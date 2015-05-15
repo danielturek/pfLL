@@ -61,20 +61,22 @@ pfLLnf <- nimbleFunction(
         y <- v <- rep(as.numeric(NA), increment)
     },
     run = function(transformedVals = double(1)) {
-        cur <<- cur + 1
-        if(cur > max) {
-            print('ERROR: bugs in setSize(), this will fail!  Github issues #57, #58')
-            max <<- max + increment
-            setSize(x, max, p)
-            setSize(y, max)
-            setSize(v, max)
-        }
         vals <- my_trans(transformedVals, 1)
         values(model, paramNodes) <<- vals
         ll <- my_PF$run(m)
-        x[cur, 1:p] <<- transformedVals
-        y[cur]      <<- ll
-        v[cur]      <<- my_PF$getVarLL()
+        if(ll != -Inf) {
+            cur <<- cur + 1
+            if(cur > max) {
+                print('ERROR: bugs in setSize(), this will fail!  Github issues #57, #58')
+                max <<- max + increment
+                setSize(x, max, p)
+                setSize(y, max)
+                setSize(v, max)
+            }
+            x[cur, 1:p] <<- transformedVals
+            y[cur]      <<- ll
+            v[cur]      <<- my_PF$getVarLL()
+        }
         returnType(double())
         return(ll)
     },
@@ -95,7 +97,7 @@ pfLLClass <- R6Class(
     public = list(
         paramNodes = NULL, p = NULL, trans = NULL,
         Rmodel = NULL, RpfLLnf = NULL, Cmodel = NULL, CpfLLnf = NULL, Ctrans = NULL,
-        psoOut = NULL, x = NULL, xRng = NULL, y = NULL, v = NULL,
+        psoOut = NULL, x = NULL, y = NULL, v = NULL,
         fittedModel = NULL, optimOut = NULL, max = NULL,
         initialize = function(
             modelarg, latentNodes, paramNodes,
@@ -104,7 +106,7 @@ pfLLClass <- R6Class(
             self$processParamArgs(paramNodes, trans)
             self$createNimbleObjects(modelarg, latentNodes, m)
             self$runPSOptim(lower, upper, psoIt, setSeed)
-            self$extractTrace(trunc)
+            self$extractXYV(trunc)
             self$fitModel('quadLM')
             self$runSurfaceOptim()
             if(plot) self$plot()
@@ -132,7 +134,7 @@ pfLLClass <- R6Class(
             if(setSeed) set.seed(0)
             self$psoOut <- psoptim(self$paramNodes, self$CpfLLnf$run, lower=tLower, upper=tUpper, control=psoControl)
         },
-        extractTrace = function(trunc) {
+        extractXYV = function(trunc) {
             ##x <- t(do.call(cbind, self$psoOut$stats$x))
             ##y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
             x <- self$CpfLLnf$getX(); y <- self$CpfLLnf$getY(); v <- self$CpfLLnf$getV()
@@ -143,7 +145,7 @@ pfLLClass <- R6Class(
             } else { keepAr <- tsearchn(xTemp, delaunayn(xTemp), x)   ## p-dim convex hull
                      keepInd <- !is.na(keepAr$idx)                  }
             x <- x[keepInd,,drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
-            self$x <- x;   self$xRng <- apply(self$x,2,range);   self$y <- y;  self$v <- v
+            self$x <- x;     self$y <- y;     self$v <- v
         },
         fitModel = function(model) {
             if(model == 'quadLM') {
@@ -162,8 +164,8 @@ pfLLClass <- R6Class(
             } else stop('unknown model')
         },
         optimFxn = function(vals) {
-            if(any(vals < self$xRng[1, ])) return(-Inf)  ## restrict predictions to
-            if(any(vals > self$xRng[2, ])) return(-Inf)  ## the range of x
+            ##if(any(vals < self$xRng[1, ])) return(-Inf)  ## restrict predictions to
+            ##if(any(vals > self$xRng[2, ])) return(-Inf)  ## the range of x
             df <- data.frame(as.list(vals))
             names(df) <- self$paramNodes
             as.numeric(predict(self$fittedModel, df))
@@ -181,7 +183,7 @@ pfLLClass <- R6Class(
             names(param) <- self$paramNodes;   names(paramT) <- paste0(self$paramNodes, 'T')
             self$max <- list(param=param, paramT=paramT, logL=logL)
             cat('Fitted surface peak location:\n');       print(self$max$param)
-            cat('Fitted surface peak value:\n');          print(self$max$logL)
+            cat(paste0('Fitted surface peak value: ', self$max$logL, '\n'))
         },
         plot = function() {
             yPred <- as.numeric(predict(self$fittedModel))
