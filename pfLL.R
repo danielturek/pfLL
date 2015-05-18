@@ -24,13 +24,13 @@ replicateModel <- function(modelarg) {
 ## 1:identity, 2:log, 3:logit
 transNF <- nimbleFunction(
     setup = function(trans) {
-        p <- length(trans)
-        trans <- matrix(as.numeric(c(identity=1, log=2, logit=3)[trans]), c(1,p))
+        d <- length(trans)
+        trans <- matrix(as.numeric(c(identity=1, log=2, logit=3)[trans]), c(1,d))
     },
     run = function(vals = double(1), inv = double()) {
-        if(length(vals) != p) print('ERROR: wrong length input to trans NF')
-        declare(newVals, double(1,p))
-        for(i in 1:p) {
+        if(length(vals) != d) print('ERROR: wrong length input to trans NF')
+        declare(newVals, double(1,d))
+        for(i in 1:d) {
             if(trans[1,i] == 1) {        ## identity
                 newVals[i] <- vals[i]
             } else if(trans[1,i] == 2) { ## log
@@ -48,32 +48,37 @@ transNF <- nimbleFunction(
 
 ## runs a nested PF at particular (runtime argument) param values
 ## runtime argument of param values are on *transformed* scales
-## paramNodes must be vector of *scalar* nodes
+## param must be vector of *scalar* nodes
 pfLLnf <- nimbleFunction(
-    setup = function(model, latentNodes, paramNodes, trans, p, m) {
-        latentNodes <- model$expandNodeNames(latentNodes, sort = TRUE)
+    setup = function(model, latent, param, trans, d, m) {
+        latent <- model$expandNodeNames(latent, sort = TRUE)
         my_trans <- transNF(trans)
-        my_PF <- buildPF(model, latentNodes, silent = TRUE)
+        my_PF <- buildPF(model, latent, silent = TRUE)
         if(missing(m)) m <- 10000
         cur <- 0
-        max <- increment <- 1000  ## must be > 1
-        x <- array(as.numeric(NA), c(increment, p))
+        max <- increment <- 100  ## must be > 1
+        x <- array(as.numeric(NA), c(increment, d))
         y <- v <- rep(as.numeric(NA), increment)
     },
     run = function(transformedVals = double(1)) {
         vals <- my_trans(transformedVals, 1)
-        values(model, paramNodes) <<- vals
+        values(model, param) <<- vals
         ll <- my_PF$run(m)
         if(ll != -Inf) {
-            cur <<- cur + 1
-            if(cur > max) {
-                print('ERROR: bugs in setSize(), this will fail!  Github issues #57, #58')
+            if(cur == max) {
                 max <<- max + increment
-                setSize(x, max, p)
+                xTemp <- x
+                yTemp <- y
+                vTemp <- v
+                setSize(x, max, d)
                 setSize(y, max)
                 setSize(v, max)
+                x[1:cur, 1:d] <<- xTemp
+                y[1:cur]      <<- yTemp
+                v[1:cur]      <<- vTemp
             }
-            x[cur, 1:p] <<- transformedVals
+            cur <<- cur + 1
+            x[cur, 1:d] <<- transformedVals
             y[cur]      <<- ll
             v[cur]      <<- my_PF$getVarLL()
         }
@@ -81,7 +86,7 @@ pfLLnf <- nimbleFunction(
         return(ll)
     },
     methods = list(
-        getX = function() { returnType(double(2)); return(x[1:cur, 1:p]) },
+        getX = function() { returnType(double(2)); return(x[1:cur, 1:d]) },
         getY = function() { returnType(double(1)); return(y[1:cur])      },
         getV = function() { returnType(double(1)); return(v[1:cur])      }
     )
@@ -91,107 +96,119 @@ pfLLnf <- nimbleFunction(
 pfLL <- function(...)
     pfLLClass$new(...)
 
-## paramNodes must be vector of *scalar* nodes
+## param must be vector of *scalar* nodes
 pfLLClass <- R6Class(
     'pfLLClass',
     public = list(
-        paramNodes = NULL, p = NULL, trans = NULL,
+        param = NULL, d = NULL, trans = NULL,
         Rmodel = NULL, RpfLLnf = NULL, Cmodel = NULL, CpfLLnf = NULL, Ctrans = NULL,
-        psoOut = NULL, x = NULL, y = NULL, v = NULL,
+        tLower = NULL, tUpper = NULL, setSeed = NULL, psoIt = NULL, trunc = NULL,
+        cHull = NULL, x = NULL, y = NULL, v = NULL, bestX = NULL, nPoints = NULL,
         fittedModel = NULL, optimOut = NULL, max = NULL,
         initialize = function(
-            modelarg, latentNodes, paramNodes,
-            lower = rep(-Inf, length(paramNodes)), upper = rep(Inf, length(paramNodes)), trans,
-            m = 1000, psoIt = 20, trunc = 0.99, setSeed = TRUE, plot = TRUE) {
-            self$processParamArgs(paramNodes, trans)
-            self$createNimbleObjects(modelarg, latentNodes, m)
-            self$runPSOptim(lower, upper, psoIt, setSeed)
-            self$extractXYV(trunc)
+            modelarg, latent, param,
+            lower = rep(-Inf, length(param)), upper = rep(Inf, length(param)), trans,
+            m = 1000, psoIt = 20, trunc = 0.999, setSeed = TRUE, plot = TRUE) {
+            self$initParamArgs(param, trans)
+            self$createNimbleObjects(modelarg, latent, m)
+            self$initPSArgs(lower, upper, setSeed, psoIt, trunc)
+            while(self$nPoints < 100*self$d) { self$runPSOptim(); self$extractXYV() }
             self$fitModel('quadLM')
             self$runSurfaceOptim()
             if(plot) self$plot()
-            self$cleanup()
+            ##self$cleanup()
         },
-        processParamArgs = function(paramNodes, trans) {
-            self$paramNodes <- paramNodes
-            self$p <- length(self$paramNodes)
-            if(missing(trans)) trans <- rep('identity', self$p)
+        initParamArgs = function(param, trans) {
+            self$param <- param;   self$d <- length(self$param)
+            if(missing(trans)) trans <- rep('identity', self$d)
             if(is.list(trans)) trans <- sapply(trans, function(t) if(identical(t,identity)) 'identity' else if(identical(t,log)) 'log' else if(identical(t,logit)) 'logit' else stop('trans'))
             if(!all(trans %in% c('identity','log','logit'))) stop('trans')
-            if(length(trans) != self$p) stop('trans')
+            if(length(trans) != self$d) stop('trans')
             self$trans <- trans
         },
-        createNimbleObjects = function(modelarg, latentNodes, m) {
+        createNimbleObjects = function(modelarg, latent, m) {
             self$Rmodel <- replicateModel(modelarg)
-            self$RpfLLnf <- pfLLnf(self$Rmodel, latentNodes, self$paramNodes, self$trans, self$p, m)
+            self$RpfLLnf <- pfLLnf(self$Rmodel, latent, self$param, self$trans, self$d, m)
             self$Cmodel <- compileNimble(self$Rmodel)
             self$CpfLLnf <- compileNimble(self$RpfLLnf, project = self$Rmodel)
             self$Ctrans <- self$CpfLLnf$my_trans
         },
-        runPSOptim = function(lower, upper, psoIt, setSeed) {
-            tLower <- self$Ctrans$run(lower, 0);   tUpper <- self$Ctrans$run(upper, 0)
-            psoControl <- list(fnscale=-1, trace=1, REPORT=1, vectorize=TRUE, maxit=psoIt)
-            if(setSeed) set.seed(0)
-            self$psoOut <- psoptim(self$paramNodes, self$CpfLLnf$run, lower=tLower, upper=tUpper, control=psoControl)
+        initPSArgs = function(lower, upper, setSeed, psoIt, trunc) {
+            self$tLower <- self$Ctrans$run(lower, 0);   self$tUpper <- self$Ctrans$run(upper, 0)
+            self$setSeed <- setSeed;   self$psoIt  <- psoIt;   self$trunc <- trunc
+            self$bestX <- rep(NA, self$d);   self$nPoints <- 0
         },
-        extractXYV = function(trunc) {
-            ##x <- t(do.call(cbind, self$psoOut$stats$x))
-            ##y <- unlist(self$psoOut$stats$f) * (-1)  ## (-1) to undo fnscale=-1 in psoptim()
-            x <- self$CpfLLnf$getX(); y <- self$CpfLLnf$getY(); v <- self$CpfLLnf$getV()
-            colnames(x) <- self$paramNodes
-            ind <- 2*(max(y)-y) < qchisq(trunc, self$p)  ## indicies of logL within trunc CI
-            xTemp <- x[ind,,drop=FALSE]    ## x values corresponding to these logL's
-            if(self$p == 1) { keepInd <- (x[,1] >= range(xTemp)[1]) & (x[,1] <= range(xTemp)[2])
-            } else { keepAr <- tsearchn(xTemp, delaunayn(xTemp), x)   ## p-dim convex hull
-                     keepInd <- !is.na(keepAr$idx)                  }
+        runPSOptim = function() {
+            if(self$setSeed) set.seed(0)
+            psoptim(self$bestX, self$CpfLLnf$run, lower=self$tLower, upper=self$tUpper,
+                    control=list(fnscale=-1, trace=1, REPORT=1, vectorize=TRUE, maxit=self$psoIt))
+        },
+        extractXYV = function() {
+            x <- self$CpfLLnf$getX();   y <- self$CpfLLnf$getY();   v <- self$CpfLLnf$getV()
+            cat(paste0('Collected a total of ', length(y), ' data points, '))
+            colnames(x) <- self$param
+            ind <- 2*(max(y)-y) < qchisq(self$trunc, self$d)  ## indicies of logL within trunc CI
+            if(sum(ind) <= self$d) {
+                keepInd <- ind  ## too few data points for convex hulls
+            } else {
+                xKeep <- x[ind,,drop=FALSE]    ## x values corresponding to these logL's
+                if(self$d == 1) { self$cHull <- range(xKeep)
+                                  keepInd <- (x[,1] >= self$cHull[1]) & (x[,1] <= self$cHull[2])
+                              } else { self$cHull <- list(xKeep, delaunayn(xKeep))
+                                       keepAr <- tsearchn(self$cHull[[1]], self$cHull[[2]], x)
+                                       keepInd <- !is.na(keepAr$idx)   } }
             x <- x[keepInd,,drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
+            self$tLower <- apply(x, 2, min);     self$tUpper <- apply(x, 2, max)
+            self$bestX <- x[which(y==max(y)), ];   self$nPoints <- length(y)
+            cat(paste0('keeping ', self$nPoints, '\n'))
             self$x <- x;     self$y <- y;     self$v <- v
         },
         fitModel = function(model) {
             if(model == 'quadLM') {
-                xterms <- c(self$paramNodes, paste0('I(', self$paramNodes, '^2)'), if(self$p > 1) combn(self$paramNodes, 2, function(x) paste0(x, collapse=':')) else character())
+                xterms <- c(self$param, paste0('I(', self$param, '^2)'), if(self$d > 1) combn(self$param, 2, function(x) paste0(x, collapse=':')) else character())
                 form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
                 df <- as.data.frame(cbind(self$x, y = self$y))
                 self$fittedModel <- lm(form, weights = 1/self$v, data = df)
                 print(summary(self$fittedModel))
             } else if(model == 'GAM') {
-                kMax <- min(floor(length(self$y)^(1/self$p)), 6)
+                kMax <- min(floor(length(self$y)^(1/self$d)), 6)
                 if(kMax < 3) stop('Need more data to fit GAM; increase psoIt argument')
-                form <- as.formula(paste0('y ~ te(', paste0(self$paramNodes, collapse=', '), ', k = ', kMax,')'))
+                form <- as.formula(paste0('y ~ te(', paste0(self$param, collapse=', '), ', k = ', kMax,')'))
                 df <- as.data.frame(cbind(self$x, y = self$y))
                 self$fittedModel <- gam(form, weights = 1/self$v, data = df)
-                if(self$p == 2)     { dev.new();   plot(self$fittedModel) }
+                if(self$d == 2)     { dev.new();   plot(self$fittedModel) }
             } else stop('unknown model')
         },
         optimFxn = function(vals) {
-            ##if(any(vals < self$xRng[1, ])) return(-Inf)  ## restrict predictions to
-            ##if(any(vals > self$xRng[2, ])) return(-Inf)  ## the range of x
+            if(self$d == 1) { if((vals < self$cHull[1]) | (vals > self$cHull[2])) return(-Inf)
+                          } else { if(is.na(tsearchn(self$cHull[[1]], self$cHull[[2]], t(matrix(vals)))$idx)) return(-Inf) }
             df <- data.frame(as.list(vals))
-            names(df) <- self$paramNodes
+            names(df) <- self$param
             as.numeric(predict(self$fittedModel, df))
         },
         runSurfaceOptim = function() {
-            if(self$p == 1) {
-                self$optimOut <- optimize(self$optimFxn, range(self$x), maximum=TRUE)
+            if(is.null(self$cHull)) stop('never assigned self$cHull; this should never happen')
+            if(self$d == 1) {
+                self$optimOut <- optimize(self$optimFxn, self$cHull, maximum=TRUE)
                 paramT <- self$optimOut$maximum; logL <- self$optimOut$objective
             } else {
-                self$optimOut <- optim(self$psoOut$par, self$optimFxn, control=list(fnscale=-1))
+                self$optimOut <- optim(self$bestX, self$optimFxn, control=list(fnscale=-1))
                 if(self$optimOut$convergence != 0)   warning('optim() failed to converge')
                 paramT <- self$optimOut$par;     logL <- self$optimOut$value
             }
             param <- self$Ctrans$run(paramT, 1)
-            names(param) <- self$paramNodes;   names(paramT) <- paste0(self$paramNodes, 'T')
+            names(param) <- self$param;   names(paramT) <- paste0(self$param, 'T')
             self$max <- list(param=param, paramT=paramT, logL=logL)
-            cat('Fitted surface peak location:\n');       print(self$max$param)
-            cat(paste0('Fitted surface peak value: ', self$max$logL, '\n'))
+            cat('fitted surface peak location:\n');       print(self$max$param)
+            cat(paste0('fitted surface peak value: ', self$max$logL, '\n'))
         },
         plot = function() {
             yPred <- as.numeric(predict(self$fittedModel))
-            numCol <- if(self$p == 1) 1 else if(self$p < 7) 2 else if(self$p < 13) 3 else 4
-            numRow <- floor((self$p-1)/numCol) + 1
+            numCol <- if(self$d == 1) 1 else if(self$d < 7) 2 else if(self$d < 13) 3 else 4
+            numRow <- floor((self$d-1)/numCol) + 1
             dev.new(); par(mfrow = c(numRow, numCol))
-            for(iParam in 1:self$p) {
-                xlab <- if(self$trans[iParam]=='identity') self$paramNodes[iParam] else paste0(self$trans[iParam],'(',self$paramNodes[iParam],')')
+            for(iParam in 1:self$d) {
+                xlab <- if(self$trans[iParam]=='identity') self$param[iParam] else paste0(self$trans[iParam],'(',self$param[iParam],')')
                 ylim <- c(min(self$y), max(c(self$y, yPred)))
                 plot(self$x[,iParam], self$y, xlab=xlab, ylab='log-likelihood', ylim=ylim, pch=20)
                 sortedX <- sort(self$x[,iParam], index.return = TRUE)
@@ -223,16 +240,19 @@ pfLLClass <- R6Class(
 ## kMax for gam() set to 4 to avoid over-fitting
 ## restrict gam() model predictions to within range of x
 
-KF_ll <- function(d) {
-    mu <- d$mu
-    a <- d$a
-    b <- mu*(1-a)
-    sigPN <- d$sigPN
+KF_ll <- function(lst) {
+    y <- lst$y
+    t <- length(y)
+    b <- lst$b
+    if(!is.null(lst$a)) {
+        a <- lst$a
+    } else if(!is.null(lst$mu)) {
+        a <- 1 - b/lst$mu
+    } else stop('lst missing both a and mu')
+    sigPN <- lst$sigPN
     sigPN2 <- sigPN*sigPN
-    sigOE <- d$sigOE
+    sigOE <- lst$sigOE
     sigOE2 <- sigOE*sigOE
-    y <- d$y
-    t <- d$t
     mu_x <- b/(1-a)
     var_x <- sigPN2 / (1-a^2)
     cov_xy <- var_x
