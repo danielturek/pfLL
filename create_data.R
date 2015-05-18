@@ -80,7 +80,7 @@ data <- list(y = as.numeric(Rmodel$y))
 inits <- list(a = Rmodel$a, b = Rmodel$b, sigPN = Rmodel$sigPN, sigOE = Rmodel$sigOE, x = as.numeric(Rmodel$x))
 latent <- 'x'
 param <- c('a',      'b',      'sigPN', 'sigOE')
-lower <- c(0,        0.5,      .0001,   .0001)
+lower <- c(0,        0.5,      .000001,  .000001)
 upper <- c(0.99,     1.5,      1,       1)
 trans <- c(identity, identity, log,     log)
 nParam <- length(param)

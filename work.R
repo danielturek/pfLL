@@ -1,29 +1,69 @@
 
 rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
-##model <- 'SSMindependent'  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
+#model <- 'SSMindependent'  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
 model <- 'SSMcorrelated'  ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 loadData(model)
+i <- 2
+self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i])
 
-KF_ll(c(data,inits))  ## [1] 19.33315
-## MLE values (according to optim()): mu=20, b=2.34, sigPN=0.193, sigOE=0.0001
-## MLE log-likelihood (according to optim()): 21.75809
 
-i <- 3
-self <- pfLL(Rmodel,latent,param[1:i],lower[1:i],upper[1:i],trans[1:i],m=5000)
 
+
+## trying MVN simulation to create a good spread of points
+
+par(mfrow = c(1,2))
+plot(self$x)
+
+self$bestX
+apply(self$x, 2, mean)
+
+cov(self$x)
+
+library(mvtnorm)
+n <- 1000
+xNew <- rmvnorm(n, self$bestX, cov(self$x))
+plot(xNew)
+
+
+## comparing pfLL performance to KF, at true values, maximized value, etc..
 
 self$CpfLLnf
-
 KF_ll(c(as.list(self$max$param), list(y=data$y)))
-
 
 KF_ll(c(data,inits))  ## [1] 19.33315
 self$param
 self$CpfLLnf$run(c(20, 1, log(0.2), log(0.05)))
+## MLE values (according to optim()): mu=20, b=2.34, sigPN=0.193, sigOE=0.0001
+## MLE log-likelihood (according to optim()): 21.75809
 
 
 
+## analytically finding neg-quadratic surface peak,
+## *and* check that fitted surface is strictly concave down.
+
+coef <- self$fittedModel$coef
+A <- array(0, c(self$d, self$d), dimnames = list(self$param, self$param))
+for(i in seq_along(self$param)) {
+    A[i, i] <- coef[paste0('I(', self$param[i], '^2)')]
+    if(i!=self$d) for(j in (i+1):self$d) A[i, j] <- A[j, i] <- 1/2 * coef[paste0(self$param[i], ':', self$param[j])]
+}
+b <- array(coef[self$param], c(self$d, 1), dimnames = list(self$param, NULL))
+c <- coef['(Intercept)']
+
+self$param
+coef
+A
+b
+c
+
+eigen(A)$values   ## should be all negative ???
+
+-1/2 * solve(A) %*% b
+t(t(self$max$paramT))
+
+-1/4 * t(b) %*% solve(A) %*% b + c
+self$max$logL
 
 ## testing accuracy of PF LL variance estimate
 
@@ -52,9 +92,6 @@ var(ll)
 varll
 mean(varll)
 var(varll)
-
-
-
 
 ## testing how to populate & resize NIMBLE vectors / arrays
 
@@ -94,18 +131,6 @@ nfDef <- nimbleFunction(
             returnType(double(1))
             return(y[1:cur])
         }
-        ## sync = function(xNew = double(2), yNew = double(1)) {
-        ##     xd1 <- dim(xNew)[1]
-        ##     xd2 <- dim(xNew)[2]
-        ##     yd1 <- dim(yNew)[1]
-        ##     if(xd2 != d) print('ERROR: inconsistent dimensions passed to sync')
-        ##     if(xd1 != yd1) print('ERROR: inconsistent numbers of data points passed to sync')
-        ##     setSize(x, xd1, xd2)
-        ##     setSize(y, xd1)
-        ##     x <<- xNew
-        ##     y <<- yNew
-        ##     cur <<- xd1
-        ## }
     )
 )
 
@@ -117,33 +142,5 @@ for(i in 1:up) Cnf$run()
 
 Cnf$getX()
 Cnf$getY()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

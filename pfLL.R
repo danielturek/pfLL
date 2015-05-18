@@ -3,7 +3,7 @@ require(igraph)
 require(nimble)
 require(R6)
 require(pso)        ## particle swarm optimization psoptim()
-require(mgcv)       ## generalized additive model fitting gam()
+##require(mgcv)       ## generalized additive model fitting gam()
 require(grDevices)  ## convex hull chull()
 require(geometry)   ## multidimensional convex hull and search
 
@@ -102,19 +102,20 @@ pfLLClass <- R6Class(
     public = list(
         param = NULL, d = NULL, trans = NULL,
         Rmodel = NULL, RpfLLnf = NULL, Cmodel = NULL, CpfLLnf = NULL, Ctrans = NULL,
-        tLower = NULL, tUpper = NULL, setSeed = NULL, psoIt = NULL, trunc = NULL,
-        cHull = NULL, x = NULL, y = NULL, v = NULL, bestX = NULL, nPoints = NULL,
-        fittedModel = NULL, optimOut = NULL, max = NULL,
+        tLower = NULL, tUpper = NULL, psoIt = NULL, trunc = NULL,
+        x = NULL, y = NULL, v = NULL, bestX = NULL, nPoints = NULL,
+        A <- NULL, fittedModel = NULL,  max = NULL,
         initialize = function(
             modelarg, latent, param,
             lower = rep(-Inf, length(param)), upper = rep(Inf, length(param)), trans,
-            m = 1000, psoIt = 20, trunc = 0.999, setSeed = TRUE, plot = TRUE) {
+            m = 5000, psoIt = 10, trunc = 0.999, setSeed = TRUE, plot = TRUE) {
+            if(setSeed) set.seed(0)
             self$initParamArgs(param, trans)
             self$createNimbleObjects(modelarg, latent, m)
-            self$initPSArgs(lower, upper, setSeed, psoIt, trunc)
+            self$initPSArgs(lower, upper, psoIt, trunc)
             while(self$nPoints < 100*self$d) { self$runPSOptim(); self$extractXYV() }
             self$fitModel('quadLM')
-            self$runSurfaceOptim()
+            ##self$runSurfaceOptim()
             if(plot) self$plot()
             ##self$cleanup()
         },
@@ -127,50 +128,78 @@ pfLLClass <- R6Class(
             self$trans <- trans
         },
         createNimbleObjects = function(modelarg, latent, m) {
+            cat('Compiling model and particle filter algorithm...\n')
             self$Rmodel <- replicateModel(modelarg)
             self$RpfLLnf <- pfLLnf(self$Rmodel, latent, self$param, self$trans, self$d, m)
             self$Cmodel <- compileNimble(self$Rmodel)
             self$CpfLLnf <- compileNimble(self$RpfLLnf, project = self$Rmodel)
             self$Ctrans <- self$CpfLLnf$my_trans
         },
-        initPSArgs = function(lower, upper, setSeed, psoIt, trunc) {
+        initPSArgs = function(lower, upper, psoIt, trunc) {
             self$tLower <- self$Ctrans$run(lower, 0);   self$tUpper <- self$Ctrans$run(upper, 0)
-            self$setSeed <- setSeed;   self$psoIt  <- psoIt;   self$trunc <- trunc
+            self$psoIt  <- psoIt;   self$trunc <- trunc
             self$bestX <- rep(NA, self$d);   self$nPoints <- 0
         },
         runPSOptim = function() {
-            if(self$setSeed) set.seed(0)
+            cat(paste0('Running particle swarm optimizer for ', self$psoIt, ' iterations...\n'))
             psoptim(self$bestX, self$CpfLLnf$run, lower=self$tLower, upper=self$tUpper,
-                    control=list(fnscale=-1, trace=1, REPORT=1, vectorize=TRUE, maxit=self$psoIt))
+                    control=list(fnscale=-1, vectorize=TRUE, maxit=self$psoIt))
+            self$psoIt <- self$psoIt * 2
         },
         extractXYV = function() {
             x <- self$CpfLLnf$getX();   y <- self$CpfLLnf$getY();   v <- self$CpfLLnf$getV()
-            cat(paste0('Collected a total of ', length(y), ' data points, '))
+            cat(paste0('Collected a total of ', length(y), ' finite points, '))
             colnames(x) <- self$param
             ind <- 2*(max(y)-y) < qchisq(self$trunc, self$d)  ## indicies of logL within trunc CI
             if(sum(ind) <= self$d) {
-                keepInd <- ind  ## too few data points for convex hulls
+                cat('too few to create convex hull, ');     keepInd <- ind
             } else {
                 xKeep <- x[ind,,drop=FALSE]    ## x values corresponding to these logL's
-                if(self$d == 1) { self$cHull <- range(xKeep)
-                                  keepInd <- (x[,1] >= self$cHull[1]) & (x[,1] <= self$cHull[2])
-                              } else { self$cHull <- list(xKeep, delaunayn(xKeep))
-                                       keepAr <- tsearchn(self$cHull[[1]], self$cHull[[2]], x)
-                                       keepInd <- !is.na(keepAr$idx)   } }
+                if(self$d == 1) {
+                    keepInd <- (x[,1] >= range(xKeep)[1]) & (x[,1] <= range(xKeep)[2])
+                } else {
+                    del <- try(delaunayn(xKeep), silent = TRUE)
+                    if(inherits(del, 'try-error')) {
+                        message('co-planar points, unable to create convex hull, ');     keepInd <- ind
+                    } else {
+                        keepAr <- tsearchn(xKeep, del, x)
+                        keepInd <- !is.na(keepAr$idx)
+                    }
+                }
+            }
             x <- x[keepInd,,drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
-            self$tLower <- apply(x, 2, min);     self$tUpper <- apply(x, 2, max)
+            ## important: not doing next line, too restictive, and fails in co-planar case
+            ##self$tLower <- apply(x, 2, min);     self$tUpper <- apply(x, 2, max)
             self$bestX <- x[which(y==max(y)), ];   self$nPoints <- length(y)
-            cat(paste0('keeping ', self$nPoints, '\n'))
+            cat(paste0('keeping ', self$nPoints, '.\n'))
             self$x <- x;     self$y <- y;     self$v <- v
         },
         fitModel = function(model) {
             if(model == 'quadLM') {
+                cat(paste0('Fitting negative-quadratic model to ', self$nPoints, ' data points...\n'))
                 xterms <- c(self$param, paste0('I(', self$param, '^2)'), if(self$d > 1) combn(self$param, 2, function(x) paste0(x, collapse=':')) else character())
                 form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
                 df <- as.data.frame(cbind(self$x, y = self$y))
                 self$fittedModel <- lm(form, weights = 1/self$v, data = df)
+                coef <- self$fittedModel$coef
+                A <- array(0, c(self$d, self$d), dimnames = list(self$param, self$param))
+                for(i in seq_along(self$param)) {
+                    A[i, i] <- coef[paste0('I(', self$param[i], '^2)')]
+                    if(i!=self$d) for(j in (i+1):self$d) A[i, j] <- A[j, i] <- 1/2 * coef[paste0(self$param[i], ':', self$param[j])]
+                }
+                b <- array(coef[self$param], c(self$d, 1), dimnames = list(self$param, NULL))
+                c <- coef['(Intercept)']
+                if(any(eigen(A)$values > 0)) warning('Negative-quadratic model fit is NOT strictly concave down')
+                paramT <- t(-1/2 * solve(A) %*% b)[1, ]
+                param <- self$Ctrans$run(paramT, 1);    names(param) <- self$param
+                logL <- (-1/4 * t(b) %*% solve(A) %*% b + c)[1,1]
+                self$A <- A
+                self$max <- list(param=param, paramT=paramT, logL=logL)
                 print(summary(self$fittedModel))
+                cat('fitted surface peak location:\n');   print(self$max$param)
+                cat(paste0('fitted surface peak value: ', self$max$logL, '\n'))
             } else if(model == 'GAM') {
+                warning('GAM model fitting is in total dis-repair')
                 kMax <- min(floor(length(self$y)^(1/self$d)), 6)
                 if(kMax < 3) stop('Need more data to fit GAM; increase psoIt argument')
                 form <- as.formula(paste0('y ~ te(', paste0(self$param, collapse=', '), ', k = ', kMax,')'))
@@ -179,30 +208,32 @@ pfLLClass <- R6Class(
                 if(self$d == 2)     { dev.new();   plot(self$fittedModel) }
             } else stop('unknown model')
         },
-        optimFxn = function(vals) {
-            if(self$d == 1) { if((vals < self$cHull[1]) | (vals > self$cHull[2])) return(-Inf)
-                          } else { if(is.na(tsearchn(self$cHull[[1]], self$cHull[[2]], t(matrix(vals)))$idx)) return(-Inf) }
-            df <- data.frame(as.list(vals))
-            names(df) <- self$param
-            as.numeric(predict(self$fittedModel, df))
-        },
-        runSurfaceOptim = function() {
-            if(is.null(self$cHull)) stop('never assigned self$cHull; this should never happen')
-            if(self$d == 1) {
-                self$optimOut <- optimize(self$optimFxn, self$cHull, maximum=TRUE)
-                paramT <- self$optimOut$maximum; logL <- self$optimOut$objective
-            } else {
-                self$optimOut <- optim(self$bestX, self$optimFxn, control=list(fnscale=-1))
-                if(self$optimOut$convergence != 0)   warning('optim() failed to converge')
-                paramT <- self$optimOut$par;     logL <- self$optimOut$value
-            }
-            param <- self$Ctrans$run(paramT, 1)
-            names(param) <- self$param;   names(paramT) <- paste0(self$param, 'T')
-            self$max <- list(param=param, paramT=paramT, logL=logL)
-            cat('fitted surface peak location:\n');       print(self$max$param)
-            cat(paste0('fitted surface peak value: ', self$max$logL, '\n'))
-        },
+        ## optimFxn = function(vals) {
+        ##     if(self$d == 1) { if((vals < self$cHull[1]) | (vals > self$cHull[2])) return(-Inf)
+        ##                   } else { if(is.na(tsearchn(self$cHull[[1]], self$cHull[[2]], t(matrix(vals)))$idx)) return(-Inf) }
+        ##     df <- data.frame(as.list(vals))
+        ##     names(df) <- self$param
+        ##     as.numeric(predict(self$fittedModel, df))
+        ## },
+        ## runSurfaceOptim = function() {
+        ##     cat('Optimizing to find fitted-surface maximum...\n')
+        ##     if(is.null(self$cHull)) stop('never assigned self$cHull; this should never happen')
+        ##     if(self$d == 1) {
+        ##         self$optimOut <- optimize(self$optimFxn, range(self$x), maximum=TRUE)
+        ##         paramT <- self$optimOut$maximum; logL <- self$optimOut$objective
+        ##     } else {
+        ##         self$optimOut <- optim(self$bestX, self$optimFxn, control=list(fnscale=-1))
+        ##         if(self$optimOut$convergence != 0)   warning('optim() failed to converge')
+        ##         paramT <- self$optimOut$par;     logL <- self$optimOut$value
+        ##     }
+        ##     param <- self$Ctrans$run(paramT, 1)
+        ##     names(param) <- self$param;   names(paramT) <- paste0(self$param, 'T')
+        ##     self$max <- list(param=param, paramT=paramT, logL=logL)
+        ##     cat('fitted surface peak location:\n');       print(self$max$param)
+        ##     cat(paste0('fitted surface peak value: ', self$max$logL, '\n'))
+        ## },
         plot = function() {
+            cat('Generating projection plots...\n')
             yPred <- as.numeric(predict(self$fittedModel))
             numCol <- if(self$d == 1) 1 else if(self$d < 7) 2 else if(self$d < 13) 3 else 4
             numRow <- floor((self$d-1)/numCol) + 1
@@ -211,6 +242,7 @@ pfLLClass <- R6Class(
                 xlab <- if(self$trans[iParam]=='identity') self$param[iParam] else paste0(self$trans[iParam],'(',self$param[iParam],')')
                 ylim <- c(min(self$y), max(c(self$y, yPred)))
                 plot(self$x[,iParam], self$y, xlab=xlab, ylab='log-likelihood', ylim=ylim, pch=20)
+                segments(x0=self$x[,iParam], y0=self$y-sqrt(self$v)/2, y1=self$y+sqrt(self$v)/2)
                 sortedX <- sort(self$x[,iParam], index.return = TRUE)
                 thisX <- sortedX$x; thisY <- yPred[sortedX$ix]
                 points(thisX, thisY, col='blue', pch=4)
