@@ -1,12 +1,32 @@
 
 rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
-##model <- 'SSMindependent'  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
-model <- 'SSMcorrelated'  ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
+##loadData('SSMindependent')  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
+loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 #### SSMcorrelated (i=2) right answers: a=0.922695, b=1.561002, logL=19.09538
-loadData(model)
-i <- 2
-self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i], trunc=0.3)
+#### SSMcorrelated (i=3) right answers: a=0.9250784, b=1.5130347, sigPN=0.1879640, logL=19.4043
+i <- 3
+self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i], trunc=0.6)
+
+
+
+## examining plots of psoXYV and mvnXYV, and fitting models
+
+## plot the x-points generated from PSO and from MVN
+dev.new()
+par(mfrow = c(1,1))
+plot(self$psoX)
+points(self$mvnX, col='red')
+
+## fit LM and plot using MVN points
+self$x<-self$mvnX; self$y<-self$mvnY; self$v<-self$mvnV
+self$fitModel()
+self$plot()
+
+## fit LM and plot using PSO points
+self$x<-self$psoX; self$y<-self$psoY; self$v<-self$psoV
+self$fitModel()
+self$plot()
 
 
 
@@ -57,20 +77,6 @@ l1
 
 
 
-## examining plots of psoXYV and mvnXYV, and fitting models
-par(mfrow = c(1,1))
-plot(self$psoX)
-points(self$mvnX, col='red')
-
-x<-self$psoX; y<-self$psoY; v<-self$psoV
-x<-self$mvnX; y<-self$mvnY; v<-self$mvnV
-self$x<-x; self$y<-y; self$v<-v
-
-self$fitModel()
-self$plot()
-
-
-
 ## figuring out why the surfaces are fitting poorly
 ## some really cool 3D plots in here!
 
@@ -82,7 +88,6 @@ library(plot3D)
 
 myKF <- function(a,b) KF_ll(list(y=data$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
-##0.922695 1.561002
 a <- seq(0.86,0.98,by=0.002)
 b <- seq(0.4,2.8,by=0.02)
 M <- mesh(a, b)
@@ -182,7 +187,22 @@ optimOut$par
 optimOut$value
 ##[1] 19.09538
 
-
+## here's for SSMcorrelated (i=3) with sigPN on log-scale
+rm(list=ls())
+source('~/GitHub/pfLL/pfLL.R')
+model <- 'SSMcorrelated'
+loadData(model)
+library(plot3D)
+myKF3 <- function(a,b,logsigPN) KF_ll(list(y=data$y, sigOE=0.05, sigPN=exp(logsigPN), a=a, b=b))
+optimInit3 <- c(0.922695, 1.561002, log(0.2))
+myKFoptim3 <- function(abLPN) myKF3(abLPN[1], abLPN[2], abLPN[3])
+optimOut3 <- optim(optimInit3, myKFoptim3, control=list(fnscale=-1))
+optimOut3$convergence
+par3 <- optimOut3$par
+c(par3[1], par3[2], exp(par3[3]))
+## 0.9250784 1.5130347 0.1879640
+optimOut3$value
+##[1] 19.4043
 
 ## developing MVN simulation for a new cloud of points
 

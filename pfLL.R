@@ -136,7 +136,7 @@ pfLLClass <- R6Class(
             }
         },
         initParamArgs = function(param, trans) {
-            self$param <- param;   self$d <- length(self$param);   self$minPoints <- 50*self$d ##10*(self$d*(self$d+3)/2 + 1)
+            self$param <- param;   self$d <- length(self$param);   self$minPoints <- 10*(self$d*(self$d+3)/2 + 1)##50*self$d
             if(missing(trans)) trans <- rep('identity', self$d)
             if(is.list(trans)) trans <- sapply(trans, function(t) if(identical(t,identity)) 'identity' else if(identical(t,log)) 'log' else if(identical(t,logit)) 'logit' else stop('trans'))
             if(!all(trans %in% c('identity','log','logit'))) stop('trans')
@@ -165,8 +165,8 @@ pfLLClass <- R6Class(
             self$psoIt <- self$psoIt * 2
             self$extract()
             self$reduce()
-            cat('best x location found to date:\n')
-            print(self$bestX)
+            cat('Best parameter location found thus far:\n')
+            TMP <- self$Ctrans$run(self$bestX, 1); names(TMP) <- self$param; print(TMP)
         },
         extract = function() {
             x <- self$CpfLLnf$getX();   y <- self$CpfLLnf$getY();   v <- self$CpfLLnf$getV()
@@ -243,7 +243,8 @@ pfLLClass <- R6Class(
                 xlab <- if(self$trans[iParam]=='identity') self$param[iParam] else paste0(self$trans[iParam],'(',self$param[iParam],')')
                 ylim <- c(min(self$y), max(c(self$y, yPred)))
                 plot(self$x[,iParam], self$y, xlab=xlab, ylab='log-likelihood', ylim=ylim, pch=20)
-                segments(x0=self$x[,iParam], y0=self$y-2*sqrt(self$v), y1=self$y+2*sqrt(self$v))
+                segments(x0=self$x[,iParam], y0=self$y-2*sqrt(self$v), y1=self$y+2*sqrt(self$v), col='grey64')
+                points(self$x[,iParam], self$y, pch=20)
                 sortedX <- sort(self$x[,iParam], index.return = TRUE)
                 thisX <- sortedX$x; thisY <- yPred[sortedX$ix]
                 points(thisX, thisY, col='blue', pch=4)
