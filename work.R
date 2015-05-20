@@ -1,29 +1,204 @@
 
 rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
-#model <- 'SSMindependent'  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
+##model <- 'SSMindependent'  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
 model <- 'SSMcorrelated'  ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
+#### SSMcorrelated (i=2) right answers: a=0.922695, b=1.561002, logL=19.09538
 loadData(model)
 i <- 2
-self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i])
+self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i], trunc=0.3)
 
 
 
 
-## trying MVN simulation to create a good spread of points
 
-par(mfrow = c(1,2))
-plot(self$x)
+## finding the difference between logL from KF_ll() and self$CpfLLnf()
+
+myKF <- function(a,b) KF_ll(list(y=data$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
+self$CpfLLnf$setM(500000)
+self$CpfLLnf$setM(100000)
+
+
+x1 <- c(0.942619, 1.156373)  ## this is what pfLL() algo finds always (SSMcorrelated, i=2)
+x2 <- c(0.8871102, 2.2625421) ## this is the maximum that KF_ll() aka mfKF() finds
+
+thisXpoint <- x2   ## just change this!!
+
+myKF(thisXpoint[1], thisXpoint[2])
+self$CpfLLnf$run(thisXpoint)
+
+pfll <- numeric()
+it <- 10
+for(i in 1:it) {
+    pfll[i] <- self$CpfLLnf$run(thisXpoint)
+}
+pfll
+mean(pfll)
+var(pfll)
+varll <- self$CpfLLnf$getV()
+varll
+mean(varll)
+var(varll)
+
+## correct L(y1), since they are different....
+sigPN <- 0.2
+sigOE <- 0.05
+varPN <- sigPN^2
+varOE <- sigOE^2
+y <- data$y
+a <- thisXpoint[1]
+b <- thisXpoint[2]
+mu_x <- b / (1-a)
+var_x <- varPN / (1-a^2)
+mu_y <- mu_x
+var_y <- var_x + varOE
+l1 <- dnorm(y[1], mu_y, sqrt(var_y), log=TRUE)
+l1
+
+
+
+## examining plots of psoXYV and mvnXYV, and fitting models
+par(mfrow = c(1,1))
+plot(self$psoX)
+points(self$mvnX, col='red')
+
+x<-self$psoX; y<-self$psoY; v<-self$psoV
+x<-self$mvnX; y<-self$mvnY; v<-self$mvnV
+self$x<-x; self$y<-y; self$v<-v
+
+self$fitModel()
+self$plot()
+
+
+
+## figuring out why the surfaces are fitting poorly
+## some really cool 3D plots in here!
+
+rm(list=ls())
+source('~/GitHub/pfLL/pfLL.R')
+model <- 'SSMcorrelated'
+loadData(model)
+library(plot3D)
+
+myKF <- function(a,b) KF_ll(list(y=data$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
+
+##0.922695 1.561002
+a <- seq(0.86,0.98,by=0.002)
+b <- seq(0.4,2.8,by=0.02)
+M <- mesh(a, b)
+x <- M$x
+y <- M$y
+ll <- array(NA, dim(x))
+for(i in 1:dim(x)[1]) for(j in 1:dim(x)[2]) ll[i,j] <- myKF(a[i],b[j])
+##for(i in 1:dim(x)[1]) for(j in 1:dim(x)[2]) ll[i,j] <- self$CpfLLnf$run(c(mu[i],b[j]))
+llsave <- ll
+
+minn <- 18
+ll[ll<minn] <- minn
+surf3D(x, y, ll, phi=0, theta=0, xlab='a', ylab='b')
+
+for(th in seq(0, 180, by=30))
+    surf3D(x, y, ll, phi=0, theta=th, main = th, xlab='a', ylab='b')
+
+imax <- which(ll>minn)
+cbind(x[imax], y[imax], ll[imax])
+
+maxx <- max(ll)
+maxx
+minn
+trun <- pchisq(2*(maxx-minn), 2)
+##12.5% !!!  high-end 30%   middle 20% ?  ## still looks good at 65%
+trun
+
+ll <- llsave
+##keepInd <- 2*(max(y)-y) < qchisq(self$trunc, self$d)  ## from pfLL.R
+discardInd <- which(2*(max(ll)-ll) >= qchisq(trun, 2))
+ll[discardInd] <- minn
+surf3D(x, y, ll, phi=0, theta=0, xlab='a', ylab='b')
+
+## now try fitting quadratic LM to these heavily reduced points
+yLM <- as.numeric(llsave)
+n <- length(yLM)
+xDF <- expand.grid(a, b)
+xLM <- array(NA, dim(xDF))
+xLM[1:n, 1] <- xDF[1:n, 1]
+xLM[1:n, 2] <- xDF[1:n, 2]
+class(xLM)
+dimnames(xLM) <- list(NULL, c('a','b'))
+
+keepInd <- yLM>minn
+yLM <- yLM[keepInd]
+xLM <- xLM[keepInd,]
+
+xterms <- c(c('a','b'), paste0('I(', c('a','b'), '^2)'), if(2 > 1) combn(c('a','b'), 2, function(x) paste0(x, collapse=':')) else character())
+form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
+df <- as.data.frame(cbind(xLM, y = yLM))
+fittedModel <- lm(form, data = df)
+summary(fittedModel)
+coef <- fittedModel$coef
+coef
+A <- array(0, c(2, 2), dimnames = list(c('a','b'), c('a','b')))
+for(i in seq_along(c('a','b'))) {
+    A[i, i] <- coef[paste0('I(', c('a','b')[i], '^2)')]
+    if(i!=2) for(j in (i+1):2) A[i, j] <- A[j, i] <- 1/2 * coef[paste0(c('a','b')[i], ':', c('a','b')[j])]
+}
+b <- array(coef[c('a','b')], c(2, 1), dimnames = list(c('a','b'), NULL))
+c <- coef['(Intercept)']
+if(any(A==0) || any(b==0) || (c==0) ) stop('coefficients not extracted correctly')
+if(any(eigen(A)$values > 0)) warning('Negative-quadratic model fit is NOT strictly concave down')
+eigen(A)
+paramT <- t(-1/2 * solve(A) %*% b)[1, ]
+logL <- (-1/4 * t(b) %*% solve(A) %*% b + c)[1,1]
+paramT
+##        a         b 
+##0.9209136 1.5967389 
+logL
+##[1] 19.09287
+
+## let's see how these LM predictions compare to our actual data
+newMin <- 18.9
+imax <- which(ll>newMin)
+length(imax)
+xTop <- x[imax]
+yTop <- y[imax]
+llTop <- ll[imax]
+ix <- sort(llTop, index.return=TRUE)$ix
+xTop <- xTop[ix]
+yTop <- yTop[ix]
+llTop <- llTop[ix]
+ddd <- cbind(xTop, yTop, llTop)
+ddd
+apply(ddd, 2, mean)
+##    xTop     yTop    llTop 
+## 0.91900  1.64000 18.97373 
+## answer: very well!
+
+optimInit <- c(0.942619, 1.156373)
+myKFoptim <- function(ab) myKF(ab[1], ab[2])
+optimOut <- optim(optimInit, myKFoptim, control=list(fnscale=-1))
+optimOut$convergence
+optimOut$par
+##[1] 0.922695 1.561002
+optimOut$value
+##[1] 19.09538
+
+
+
+## developing MVN simulation for a new cloud of points
+
 
 self$bestX
 apply(self$x, 2, mean)
-
 cov(self$x)
 
-library(mvtnorm)
-n <- 1000
+n <- 400
 xNew <- rmvnorm(n, self$bestX, cov(self$x))
-plot(xNew)
+for(i in 1:n) self$CpfLLnf$run(xNew[i, ])
+
+par(mfrow = c(1,1))
+plot(self$x)
+points(xNew, col='red')
+
 
 
 ## comparing pfLL performance to KF, at true values, maximized value, etc..
@@ -65,6 +240,8 @@ t(t(self$max$paramT))
 -1/4 * t(b) %*% solve(A) %*% b + c
 self$max$logL
 
+
+
 ## testing accuracy of PF LL variance estimate
 
 rm(list=ls())
@@ -92,6 +269,8 @@ var(ll)
 varll
 mean(varll)
 var(varll)
+
+
 
 ## testing how to populate & resize NIMBLE vectors / arrays
 

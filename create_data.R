@@ -14,9 +14,10 @@ code <- quote({
     b ~ dnorm(0, sd = 1000)
     sigPN ~ dunif(0.0001, 1)
     sigOE ~ dunif(0.0001, 1)
-    x[1] ~ dnorm(mu, sd = sqrt(sigPN^2 + sigOE^2))
+    a <- 1 - b/mu
+    ##x[1] ~ dnorm(mu, sd = sqrt(sigPN^2 + sigOE^2))
+    x[1] ~ dnorm(mu, sd = sqrt(sigPN^2 / (1-a^2)))
     y[1] ~ dnorm(x[1], sd = sigOE)
-    a <- 1-(b/mu)
     for(i in 2:t){
         x[i] ~ dnorm(x[i-1] * a + b, sd = sigPN)
         y[i] ~ dnorm(x[i], sd = sigOE)
@@ -59,7 +60,8 @@ code <- quote({
     b ~ dnorm(0, sd = 1000)
     sigPN ~ dunif(0.0001, 1)
     sigOE ~ dunif(0.0001, 1)
-    x[1] ~ dnorm(b/(1-a), sd = sqrt(sigPN^2 + sigOE^2))
+    ##x[1] ~ dnorm(b/(1-a), sd = sqrt(sigPN^2 + sigOE^2))
+    x[1] ~ dnorm(b/(1-a), sd = sqrt(sigPN^2 / (1-a^2)))
     y[1] ~ dnorm(x[1], sd = sigOE)
     for(i in 2:t){
         x[i] ~ dnorm(x[i-1] * a + b, sd = sigPN)
@@ -79,10 +81,10 @@ simulate(Rmodel, Rmodel$getDependencies(c('x', 'y')))
 data <- list(y = as.numeric(Rmodel$y))
 inits <- list(a = Rmodel$a, b = Rmodel$b, sigPN = Rmodel$sigPN, sigOE = Rmodel$sigOE, x = as.numeric(Rmodel$x))
 latent <- 'x'
-param <- c('a',      'b',      'sigPN', 'sigOE')
-lower <- c(0,        0.5,      .000001,  .000001)
-upper <- c(0.99,     1.5,      1,       1)
-trans <- c(identity, identity, log,     log)
+param <- c('a',      'b',       'sigPN',   'sigOE')
+lower <- c(0.80,      0,         .000001,   .000001)
+upper <- c(0.99,      5,         1,         1)
+trans <- c(identity,  identity,  log,       log)
 nParam <- length(param)
 save(code, constants, data, inits, latent, param, lower, upper, trans, nParam, file=modelfileName)
 
