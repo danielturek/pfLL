@@ -60,6 +60,9 @@ pfLLnf <- nimbleFunction(
         max <- increment <- 100  ## must be > 1
         x <- array(0, c(increment, d))
         y <- v <- rep(0, increment)
+        ## adaptive <- FALSE
+        ## adaptMultFactor <- 1.5
+        ## adaptAlpha <- 0.05
     },
     run = function(transformedVals = double(1)) {
         vals <- my_trans(transformedVals, 1)
@@ -82,15 +85,41 @@ pfLLnf <- nimbleFunction(
             x[cur, 1:d] <<- transformedVals
             y[cur]      <<- ll
             v[cur]      <<- my_PF$getVarLL()
+            ## if(adaptive & (cur > 1)) {
+            ##     print('***************************')
+            ##     print('entering adaptive routine')
+            ##     print('m is: ', m)
+            ##     print('cur is: ', cur)
+            ##     T <- abs(getLastY(0) - getLastY(1)) / sqrt(getLastV(0) + getLastV(1))
+            ##     print('T is: ', T)
+            ##     pn <- pnorm(T)
+            ##     print('pn is: ', pn)
+            ##     if(pn < 1 - adaptAlpha/2) {  ## fail to rejust H0: means are equal
+            ##         print('going to adapt m upwards')
+            ##         newM <- floor(m*adaptMultFactor)
+            ##         setM(newM)
+            ##         print('set m to: ', m)
+            ##     } else {
+            ##         print('going to adapt down')
+            ##         newM <- floor(m/adaptMultFactor)
+            ##         setM(newM)
+            ##         print('set m to: ', newM)
+            ##     }
+            ##     print('***************************')
+            ## }
         }
         returnType(double())
         return(ll)
     },
     methods = list(
-        setM = function(mNew = integer()) m <<- mNew,
         getX = function() { returnType(double(2)); return(x[1:cur, 1:d]) },
         getY = function() { returnType(double(1)); return(y[1:cur])      },
         getV = function() { returnType(double(1)); return(v[1:cur])      },
+        getLastY  = function(back = integer()) { returnType(double()); return(y[cur-back]) },
+        getLastV  = function(back = integer()) { returnType(double()); return(v[cur-back]) },
+        getM = function() { returnType(double()); return(m) },
+        setM = function(mNew = integer()) m <<- mNew,
+        scaleM = function(k = double()) m <<- floor(k*m),
         reset = function() {
             cur <<- 0
             max <<- increment
