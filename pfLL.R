@@ -246,7 +246,7 @@ pfLLClass <- R6Class(
         genSamplesLoopPSOptim = function(multipleOfMin = 1, print = TRUE) {
             self$psoTimes <- self$psoTimes + 1
             psoMinPoints <- floor(self$minPoints * multipleOfMin)
-            if(print) message('Loop PSO until we collect ', psoMinPoints, ' points')
+            if(print) message('Loop PSO until we collect ', psoMinPoints, ' points within ', floor(100*self$trunc), '-percent LRT interval')
             numIt <- self$psoIt
             self$resetSamples(print = FALSE)
             self$extractSamples(print = FALSE)
@@ -338,9 +338,9 @@ pfLLClass <- R6Class(
                 self$setBestFromQuadLM(print = print)
                 self$setCovXFromQuadLM(print = print)
                 if(self$plot) if(self$mvnQuadLMTimes %% 2 == 1) {
-                    self$plot2D(newPlot = newPlot, col='pink',  bestCol='black')
+                    self$plot2D(newPlot = newPlot, col='pink',  bestCol='orange')
                 } else {
-                    self$plot2D(newPlot = newPlot, col='black', bestCol='pink')
+                    self$plot2D(newPlot = newPlot, col='black', bestCol='red')
                 }
                 tBestX1 <- self$tBestX
                 delta <- sqrt(sum((tBestX0-tBestX1)^2))
