@@ -5,59 +5,26 @@ source('~/GitHub/pfLL/pfLL.R')
 loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 #### SSMcorrelated (i=2) right answers: a=0.922695, b=1.561002, logL=19.09538
 #### SSMcorrelated (i=3) right answers: a=0.9250784, b=1.5130347, sigPN=0.1879640, logL=19.4043
-i <- 3
-self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], trans[1:i])
+##i <- 2;     MLE <- c(0.922695,  1.561002)
+i <- 3;     MLE <- c(0.9250784, 1.5130347, 0.1879640)
+self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], trans[1:i], MLE=MLE)
 ##myKF <- function(a,b) KF_ll(list(y=self$Cmodel$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
-
-self$genSamplesLoopPSOptim()
-x <- self$x
-rng <- apply(x, 2, range)
-plot3D(bestCol='pink', xlim=c(rng[1,1], 0.94), ylim=c(1.4, rng[2,2]))
-
-self$fitQuadLM()
-self$checkQuadLM()
-self$setBestFromQuadLM()
-self$setCovXFromSamples()
-self$addDotAtBest('blue')
-plot3D(bestCol='blue', xlim=c(rng[1,1], 0.94), ylim=c(1.4, rng[2,2]))
-
-self$genSamplesMVNApprox()
-##self$genSamplesMVNApprox(4)
-plot3D(newPlot=FALSE, col='pink', bestCol='red')
-plot3D(newPlot=FALSE, col='grey', bestCol='blue')
-self$fitQuadLM()
-self$checkQuadLM()
-self$setBestFromQuadLM()
-addDotAtBest3D('black')
-plotMLE3D()
+self$initialPSOInvestigation()
+self$iterMVNapproxQuadLMfit()
 
 
 
 
-plot3D = function(x, newPlot = TRUE, bestDot = TRUE, bestCol = 'yellow', ...) {
-    if(self$d != 3) stop();     if(!all(c('a','b','sigPN') %in% self$param)) stop()
-    if(missing(x))  x <- self$x
-    if(newPlot) {
-        dev.new()
-        plot(x[,1], x[,2], type = 'p', ...)
-    }
-    points(x[,1], x[,2], ...)
-    points(0.866, 2.70, pch=19, col='yellow') ## initial point
-    plotMLE3D()
-    if(bestDot) addDotAtBest3D(bestCol)
-}
 
-addDotAtBest3D = function(col = 'yellow') {
-    points(self$tBestX[1], self$tBestX[2], pch=19, col=col)
-}
 
-plotMLE3D = function() {
-    points(0.9250784, 1.5130347, pch=19, col='green')  ## plots the MLE
-}
+
+
 
 
 ## using ppr()
+
+eigen(self$quadLMABC$A)
 
 ## never ut this function into use
 fitPPR = function() {
