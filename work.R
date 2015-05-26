@@ -8,13 +8,13 @@ loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 #### SSMcorrelated (i=4) right answers: a=?, b=?, sigPN=?, sigPN=?, logL=?
 ##i <- 2;   MLE <- c(0.922695,  1.561002)
 ##i <- 3;   MLE <- c(0.9250784, 1.5130347, 0.1879640)
-i <- 4;   MLE <- c(0.95, 1.2, 0.2, 0.1)   ### NOTE: green point (MLE value) made up
+i <- 4;   MLE <- c(0.95, 1.0, 0.2, 0.1)   ### NOTE: green point (MLE value) made up
 self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], trans[1:i], MLE=MLE)
 ##myKF <- function(a,b) KF_ll(list(y=self$Cmodel$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
-self$initialPSOInvestigation()
 
 message('START')
+self$initialPSOInvestigation()
 self$iterMVNapproxQuadLMfit()
 self$iterMVNapproxQuadLMfit()
 self$iterMVNapproxQuadLMfit()
