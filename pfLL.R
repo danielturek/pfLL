@@ -304,14 +304,13 @@ pfLLClass <- R6Class(
             return(ok)
         },
         setBestFromQuadLM = function(print = TRUE) {
-            if(print) message('Setting bestX and Y from negative-quadratic linear model')
             A <- self$quadLMABC$A;   b <- self$quadLMABC$b;   c <- self$quadLMABC$c
             paramT <- t(-1/2 * solve(A) %*% b)[1, ]
             logL <- (-1/4 * t(b) %*% solve(A) %*% b + c)[1,1]
             self$internalSetBest(paramT, logL)
-            if(print) { message('bestX:')
+            if(print) { message('Set bestX from negative-quadratic linear model')
                         print(self$bestX)
-                        message('corredponding bestY: ', self$bestY) }
+                        message('Set corresponding bestY: ', self$bestY) }
         },
         setCovXFromQuadLM = function(print = TRUE) {
             newCov <- -1 * solve(self$quadLMABC$A)
@@ -324,19 +323,19 @@ pfLLClass <- R6Class(
         initialPSOInvestigation = function(print = TRUE) {
             self$genSamplesLoopPSOptim(0.5, print = print)
             if(self$plot) self$plot2D()
-            self$setCovXFromSamples(print = print)
+            self$setCovXFromSamples(print = FALSE)
         },
         iterMVNapproxQuadLMfit = function(print = TRUE, newPlot = FALSE) {
             self$mvnQuadLMTimes <- self$mvnQuadLMTimes + 1
             if(print) message('Iteration MVN sample generation and negative-quadratic linear modeling, iteration: ', self$mvnQuadLMTimes)
-            scaleFactor <- 1.5
+            scaleFactor <- 1.25
             tBestX0 <- self$tBestX
             self$scaleM(scaleFactor, print = print)
             self$genSamplesMVNApprox(scaleFactor^self$mvnQuadLMTimes, print = print)
             self$fitQuadLM(print = print)
             if(self$checkQuadLM(print = print)) {
                 self$setBestFromQuadLM(print = print)
-                self$setCovXFromQuadLM(print = print)
+                self$setCovXFromQuadLM(print = FALSE)
                 if(self$plot) if(self$mvnQuadLMTimes %% 2 == 1) {
                     self$plot2D(newPlot = newPlot, col='pink',  bestCol='orange')
                 } else {

@@ -13,10 +13,13 @@ self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], tran
 ##myKF <- function(a,b) KF_ll(list(y=self$Cmodel$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
 self$initialPSOInvestigation()
+
+message('START')
 self$iterMVNapproxQuadLMfit()
 self$iterMVNapproxQuadLMfit()
 self$iterMVNapproxQuadLMfit()
 self$iterMVNapproxQuadLMfit()
+message('FINISH')
 
 
 
