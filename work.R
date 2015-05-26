@@ -5,12 +5,54 @@ source('~/GitHub/pfLL/pfLL.R')
 loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 #### SSMcorrelated (i=2) right answers: a=0.922695, b=1.561002, logL=19.09538
 #### SSMcorrelated (i=3) right answers: a=0.9250784, b=1.5130347, sigPN=0.1879640, logL=19.4043
-i <- 3
-self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], trans[1:i], trunc=0.6)
+i <- 2
+self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], trans[1:i])
+##myKF <- function(a,b) KF_ll(list(y=self$Cmodel$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
 
+self$loopPSOptim()
+self$plot2D()
+self$setCovXFromXYV()
+self$mvnApprox()
+self$plot2D(col='red')
+self$fitQuadLM()
+self$checkQuadLM()
+self$setBestXYFromQuadLM()
 
-## examining plots of psoXYV and mvnXYV, and fitting models
+## using ppr()
+
+d <- 2
+V <- array(c(1,-1,0,1), c(2,2))
+n <- 100
+xlist <- lapply(1:d, function(i) (1-n/2):(n/2))
+X <- as.matrix(expand.grid(xlist)) / 100
+colnames(X) <- paste0('x', 1:d)
+Xp <- X %*% V
+##y <- sin(Xp[,1]*pi) + (Xp[,2])^2
+y <- -3*(Xp[,1])^3##-3*(Xp[,1]-50)^2 + abs(Xp[,2])
+
+nterms <- 2
+##pp <- ppr(cbind(x1,x2), matrix(y), nterms = nterms, max.terms = 5, sm.method='gcvspline')
+pp <- ppr(X, matrix(y), nterms = nterms, max.terms = 4)
+summary(pp)
+par(mfrow = c(nterms,1))
+plot(pp)
+#plot(pp$gofn, type='b')
+
+## examples from ppr() method:
+
+attach(rock)
+area1 <- area/10000; peri1 <- peri/10000
+rock.ppr <- ppr(log(perm) ~ area1 + peri1 + shape, data = rock, nterms = 2, max.terms = 5)
+rock.ppr
+summary(rock.ppr)
+par(mfrow = c(3,2))   # maybe: , pty = "s")
+plot(rock.ppr, main = "ppr(log(perm)~ ., nterms=2, max.terms=5)")
+plot(update(rock.ppr, bass = 5), main = "update(..., bass = 5)")
+plot(update(rock.ppr, sm.method = "gcv", gcvpen = 2),
+     main = "update(..., sm.method=\"gcv\", gcvpen=2)")
+cbind(perm = rock$perm, prediction = round(exp(predict(rock.ppr)), 1))
+detach()
 
 ## plot the x-points generated from PSO and from MVN
 dev.new()

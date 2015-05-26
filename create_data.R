@@ -39,9 +39,11 @@ latent <- 'x'
 param <- c('mu',     'b',      'sigPN',  'sigOE')
 lower <- c(19,      -10,       .000001,  .000001)
 upper <- c(22,       10,       1,        1)
+init  <- c(19,       3,        0.1,      0.1)
 trans <- c(identity, identity, log,      log)
 nParam <- length(param)
-save(code, constants, data, inits, latent, param, lower, upper, trans, nParam, file=modelfileName)
+save(code, constants, data, inits, latent, param, lower, upper, init, trans, nParam, file=modelfileName)
+
 
 
 
@@ -84,9 +86,10 @@ latent <- 'x'
 param <- c('a',      'b',       'sigPN',   'sigOE')
 lower <- c(0.80,      0,         .000001,   .000001)
 upper <- c(0.99,      5,         1,         1)
+init  <- c(0.866,     2.70,      0.1,       0.1)
 trans <- c(identity,  identity,  log,       log)
 nParam <- length(param)
-save(code, constants, data, inits, latent, param, lower, upper, trans, nParam, file=modelfileName)
+save(code, constants, data, inits, latent, param, lower, upper, init, trans, nParam, file=modelfileName)
 
 
 
