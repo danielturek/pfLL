@@ -113,39 +113,40 @@ pfLL <- function(...)
 pfLLClass <- R6Class(
     'pfLLClass',
     public = list(
-        psoIt = NULL, trunc = NULL, plot = NULL,    ## set from initialize()
-        param = NULL, d = NULL, minPoints = NULL, trans = NULL,               ## set in initParamArgs()
+        trunc = NULL, plot = NULL,       ## set from initialize()
+        param = NULL, d = NULL, numQLMparams = NULL, trans = NULL,            ## set in initParamArgs()
         Rmodel = NULL, rnf = NULL, Cmodel = NULL, cnf = NULL, Ctrans = NULL,  ## set in createNimbleObjects()
         init = NULL, tInit = NULL, tLower = NULL, tUpper = NULL,              ## set in initLowerUpperBest()
         MLE = NULL, tMLE = NULL,
         ## persistent variables:
         bestX = NULL, tBestX = NULL, covX = NULL, bestY = NULL,
         x = NULL, y = NULL, v = NULL, nPoints = NULL,
-        psoTimes = NULL, psoHist = NULL,
-        mvnTimes = NULL, mvnHist = NULL,
-        quadLMTimes = NULL, quadLMHist = NULL, quadLM = NULL, quadLMABC = NULL,
-        mvnQuadLMTimes = NULL,
+        quadLM = NULL, quadLMABC = NULL, quadLMcheck = NULL,
+        plot2Dtimes = NULL,
+        ##
+        ## initialization functions
+        ##
         initialize = function(
             model, latent, param, lower, upper, init, trans,
-            m=5000, psoIt=10, trunc=0.9, MLE, setSeed=TRUE, plot=TRUE) {
+            m=5000, trunc=0.9, MLE, setSeed=TRUE, plot=TRUE) {
             if(setSeed) set.seed(0)
-            self$psoIt <- psoIt;     self$trunc <- trunc;     self$plot <- plot
+            self$trunc <- trunc;     self$plot <- plot
             self$initParamArgs(param, trans)
-            self$createNimbleObjects(model, latent, m)
+            self$initNimbleObjects(model, latent, m)
             self$initLowerUpper(init, lower, upper, MLE)
             self$initPersistentVars()
             message('Fitting ', self$d, ' state space model parameters: ', paste0(self$param,collapse=', '))
-            message('Baseline min. number of points: (num params of neg-quadratic model) * 10 = ', self$minPoints)
+            message('Requires ', self$numQLMparams, ' parameters for negative-quadratic surface approximation')
         },
         initParamArgs = function(param, trans) {
-            self$param <- param;   self$d <- length(self$param);   self$minPoints <- 10*(self$d*(self$d+3)/2 + 1)
+            self$param <- param;   self$d <- length(self$param);   self$numQLMparams <- self$d*(self$d+3)/2+1
             if(missing(trans)) trans <- rep('identity', self$d)
             if(is.list(trans)) trans <- sapply(trans, function(t) if(identical(t,identity)) 'identity' else if(identical(t,log)) 'log' else if(identical(t,logit)) 'logit' else stop('trans'))
             if(!all(trans %in% c('identity','log','logit'))) stop('trans')
             if(length(trans) != self$d) stop('trans')
             self$trans <- trans
         },
-        createNimbleObjects = function(model, latent, m) {
+        initNimbleObjects = function(model, latent, m) {
             cat('Compiling model and particle filter...\n')
             self$Rmodel <- replicateModel(model)
             self$rnf <- pfLLnf(self$Rmodel, latent, self$param, self$trans, self$d, m)
@@ -169,45 +170,12 @@ pfLLClass <- R6Class(
             self$covX <- diag(self$d)
             self$bestY <- -Inf
             self$resetSamples(print = FALSE)
-            self$extractSamples(print = FALSE)    ## sets x, y, v, nPoints
-            self$psoTimes <- 0;     self$psoHist <- list()
-            self$mvnTimes <- 0;     self$mvnHist <- list()
-            self$quadLMTimes <- 0;  self$quadLMHist <- list()
-            self$mvnQuadLMTimes <- 0
+            self$extractSamples(reduce = FALSE, print = FALSE)    ## sets x, y, v, nPoints
+            self$plot2Dtimes <- 0
         },
-        scaleM = function(mScale = 1, print = TRUE) {
-            newM <- floor(mScale * self$cnf$getM())
-            self$cnf$setM(newM)
-            if(print) message('Changed number of PF particles to: ', newM)
-        },
-        resetSamples = function(print = TRUE) {
-            if(print) message('Reset stored samples')
-            self$cnf$reset()
-        },
-        extractSamples = function(print = TRUE) {
-            x <- self$cnf$getX();   y <- self$cnf$getY();   v <- self$cnf$getV()
-            colnames(x) <- self$param
-            self$x <- x;     self$y <- y;     self$v <- v;    self$nPoints <- length(self$y)
-            if(print) cat(paste0('Extracted ', self$nPoints, ' sample', if(self$nPoints==1) '' else 's', '\n'))        },
-        reduceSamples = function(print = TRUE) {
-            x <- self$x;     y <- self$y;     v <- self$v
-            ind <- keepInd <- 2*(max(y)-y) < qchisq(self$trunc, self$d)
-            if(sum(ind) > self$d) {
-                xKeep <- x[ind, , drop=FALSE]
-                if(self$d == 1) {
-                    keepInd <- (x[,1] >= range(xKeep)[1]) & (x[,1] <= range(xKeep)[2])
-                } else {
-                    del <- try(delaunayn(xKeep, options=c('QJ','Pp')), silent = TRUE)
-                    if(!inherits(del, 'try-error')) {
-                        keepAr <- tsearchn(xKeep, del, x)
-                        keepInd <- !is.na(keepAr$idx)
-                    }
-                }
-            }
-            x <- x[keepInd, , drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
-            self$x <- x;     self$y <- y;     self$v <- v;    self$nPoints <- length(self$y)
-            if(print) message(floor(100*self$trunc), '-percent LRT reduced these to ', self$nPoints, ' sample', if(self$nPoints==1) '' else 's')
-        },
+        ##
+        ## internal-only functions
+        ##
         internalSetBest = function(newTBestX, newBestY) {
             if(length(newTBestX) != self$d) stop('wrong length for new best')
             newBestX <- self$Ctrans$run(newTBestX, 1)
@@ -219,6 +187,36 @@ pfLLClass <- R6Class(
             rownames(newCov) <- colnames(newCov) <- self$param
             self$covX <- newCov
         },
+        ##
+        ## functions dealing with samples
+        ##
+        resetSamples = function(print = TRUE) {
+            if(print) message('Reset stored samples')
+            self$cnf$reset()
+        },
+        extractSamples = function(reduce = TRUE, print = TRUE) {
+            x <- self$cnf$getX();   y <- self$cnf$getY();   v <- self$cnf$getV()
+            if(print) message('Extracted ', length(y), ' sample', if(length(y)==1) '' else 's')
+            if(reduce) {
+                ind <- keepInd <- 2*(max(y)-y) < qchisq(self$trunc, self$d)
+                if(sum(ind) > self$d) {
+                    xKeep <- x[ind, , drop=FALSE]
+                    if(self$d == 1) {
+                        keepInd <- (x[,1] >= range(xKeep)[1]) & (x[,1] <= range(xKeep)[2])
+                    } else {
+                        del <- try(delaunayn(xKeep, options=c('QJ','Pp')), silent = TRUE)
+                        if(!inherits(del, 'try-error')) {
+                            keepAr <- tsearchn(xKeep, del, x)
+                            keepInd <- !is.na(keepAr$idx)
+                        }
+                    }
+                }
+                x <- x[keepInd, , drop=FALSE];   y <- y[keepInd];   v <- v[keepInd]
+                if(print) message(floor(100*self$trunc), '-percent LRT reduced these to ', length(y), ' sample', if(length(y)==1) '' else 's')
+            }
+            colnames(x) <- self$param
+            self$x <- x;     self$y <- y;     self$v <- v;    self$nPoints <- length(self$y)
+        },
         setBestFromSamples = function(print = TRUE) {
             yMax <- max(self$y)
             ind <- which(self$y == yMax)
@@ -226,64 +224,47 @@ pfLLClass <- R6Class(
             self$internalSetBest(txbest, yMax)
             if(print) { message('Set bestX from samples values:')
                         print(self$bestX)
-                        message('Set corresponding bestY: ', self$bestY) }
+                        message('Set corresponding best logL: ', self$bestY) }
         },
         setCovXFromSamples = function(print = TRUE) {
             newCov <- cov(self$x)
             self$internalSetCovX(newCov)
             if(print) message('Set covX from sample values')
         },
-        getCovX = function() self$covX,
-        getCorX = function() cov2cor(self$covX),
+        ##
+        ## functions which evaluate the PF (the only methods which may call self$cnf$run)
+        ##
+        evaluatePFonXarray = function(xArray, mScale = 1, print = TRUE) {
+            origM <- self$cnf$getM();    tempM <- floor(mScale*origM);    self$cnf$setM(tempM)
+            if(print) if(mScale != 1) message('Adusting number of particles to: ', tempM)
+            numPoints <- dim(xArray)[1];     if(numPoints==0) stop('zero points passed to evalPFonXarray')
+            if(print) message('Evaluating particle filter on ', numPoints, ' points...')
+            ##for(i in 1:numPoints) self$cnf$run(xArray[i, ])
+            lapply(1:numPoints, function(i) self$cnf$run(xArray[i, ]))
+            self$cnf$setM(origM);    return(invisible(NULL))
+        },
+        runOptim = function(numIt, print = TRUE) {
+            if(print) message('Running optim for ', numIt, ' iterations...')
+            optim(self$tBestX, self$cnf$run, control=list(fnscale=-1, maxit=numIt))
+        },
         runPSOptim = function(numIt, print = TRUE) {
-            if(print) cat(paste0('Running particle swarm for ', numIt, ' iterations...\n'))
+            if(print) message('Running PSO for ', numIt, ' iterations...')
             psoptim(self$tBestX, self$cnf$run, lower=self$tLower, upper=self$tUpper,
-                    control=list(fnscale=-1, vectorize=TRUE, maxit=numIt))
+                    control=list(fnscale=-1, maxit=numIt, vectorize=TRUE))
         },
-        genSamplesLoopPSOptim = function(multipleOfMin = 1, print = TRUE) {
-            self$psoTimes <- self$psoTimes + 1
-            psoMinPoints <- floor(self$minPoints * multipleOfMin)
-            if(print) message('Loop PSO until we collect ', psoMinPoints, ' points within ', floor(100*self$trunc), '-percent LRT interval')
-            numIt <- self$psoIt
-            self$resetSamples(print = FALSE)
-            self$extractSamples(print = FALSE)
-            while(self$nPoints < psoMinPoints) {
-                self$runPSOptim(numIt, print = print)
-                self$extractSamples(print = print)
-                self$reduceSamples(print = print)
-                self$setBestFromSamples(print = FALSE)
-                if(print) { message('Best parameter location found thus far:')
-                            print(self$bestX)
-                            message('Best logL found there: ', self$bestY) }
-                numIt <- floor(numIt * 1.5)
-            }
-            self$psoHist[[self$psoTimes]] <- list(x=self$x, y=self$y, v=self$v)
-        },
-        genSamplesMVNApprox = function(multipleOfMin = 1, print = TRUE) {
-            self$mvnTimes <- self$mvnTimes + 1
-            numMVNPoints <- floor(self$minPoints * multipleOfMin)
-            if(print) message('Generating MVN point cloud of ', numMVNPoints, ' points')
-            xNew <- rmvnorm(numMVNPoints, self$tBestX, self$covX)
-            self$resetSamples(print = FALSE)
-            if(print) message('Evaluating particle filter on point cloud...')
-            for(i in 1:numMVNPoints) self$cnf$run(xNew[i, ])
-            self$extractSamples(print = print)
-            self$mvnHist[[self$mvnTimes]] <- list(x=self$x, y=self$y, v=self$v)
-        },
+        ##
+        ## fit quadLM
+        ##
         fitQuadLM = function(print = TRUE) {
-            self$quadLMTimes <- self$quadLMTimes + 1
             xterms <- c(self$param, paste0('I(', self$param, '^2)'), if(self$d > 1) combn(self$param, 2, function(x) paste0(x, collapse=':')) else character())
             form <- as.formula(paste0('y ~ ', paste0(xterms, collapse=' + ')))
             df <- as.data.frame(cbind(self$x, y = self$y))
             self$quadLM <- lm(form, weights = 1/self$v, data = df)
-            self$quadLMABC <- NULL
             ##if(print) print(summary(self$quadLM))
-            self$quadLMHist[[self$quadLMTimes]] <- list(mod = self$quadLM)
-            if(print) message('Fit ', self$minPoints/10, '-parameter negative-quadratic linear model to ', self$nPoints, ' data points')
-        },
-        checkQuadLM = function(print = TRUE) {
-            if(print) message('Checking negative-quadratic linear model fit')
-            ok <- TRUE
+            if(print) message('Fit ', self$numQLMparams, '-parameter negative-quadratic linear model to ', self$nPoints, ' data points')
+            if(print) message('Checking model fit')
+            self$quadLMcheck <- 1
+            self$quadLMABC <- NULL
             coef <- self$quadLM$coef
             A <- array(0, c(self$d, self$d), dimnames = list(self$param, self$param))
             for(i in seq_along(self$param)) {
@@ -292,103 +273,107 @@ pfLLClass <- R6Class(
             }
             b <- array(coef[self$param], c(self$d, 1), dimnames = list(self$param, NULL))
             c <- coef['(Intercept)']
-            if(any(is.na(coef))) { if(print) message('Model coefficient is NA: singular design matrix'); ok <- FALSE }
+            if(any(is.na(coef))) { if(print) message('Model coefficient is NA: singular design matrix'); self$quadLMcheck <- -1 }
             if(any(A==0) || any(b==0) || (c==0) ) stop('Coefficients not extracted correctly')
-            if(any(eigen(A)$values > 0)) { if(print) message('Negative-quadratic model fit is NOT strictly concave down'); ok <- FALSE }
+            if(any(eigen(A)$values > 0)) { if(print) message('Negative-quadratic model fit is NOT strictly concave down'); self$quadLMcheck <- -2 }
             self$quadLMABC <- list(A=A, b=b, c=c)
-            self$quadLMHist[[self$quadLMTimes]] <- list(mod = self$quadLM, abc = self$quadLMABC)
-            if(print) if(ok) message('Model fit OK')
-            return(ok)
+            if(print) if(self$quadLMcheck == 1) message('Model fit OK')
         },
-        setBestFromQuadLM = function(print = TRUE) {
+        setBestXCovXFromQuadLM = function(print = TRUE) {
             A <- self$quadLMABC$A;   b <- self$quadLMABC$b;   c <- self$quadLMABC$c
             paramT <- t(-1/2 * solve(A) %*% b)[1, ]
             logL <- (-1/4 * t(b) %*% solve(A) %*% b + c)[1,1]
             self$internalSetBest(paramT, logL)
+            newCov <- -1/2 * solve(A)
+            self$internalSetCovX(newCov)
             if(print) { message('Set bestX from negative-quadratic linear model')
                         print(self$bestX)
-                        message('Set corresponding bestY: ', self$bestY) }
+                        message('Set corresponding best logL: ', self$bestY)
+                        message('Set covX from quadratic linear model fit') }
         },
-        setCovXFromQuadLM = function(print = TRUE) {
-            newCov <- -1/2 * solve(self$quadLMABC$A)
-            self$internalSetCovX(newCov)
-            if(print) message('Set covX from quadratic linear model fit')
-        },
-        initialPSOInvestigation = function(mult = 0.5, print = TRUE) {
-            self$genSamplesLoopPSOptim(mult, print = print)
-            if(self$plot) self$plot2D(bestCol = 'red')
-            self$setCovXFromSamples(print = print)
-        },
-        iterMVNapproxQuadLMfit = function(print = TRUE, newPlot = FALSE) {
-            self$mvnQuadLMTimes <- self$mvnQuadLMTimes + 1
-            if(print) message('MVN sample generation and negative-quadratic linear modeling, iteration: ', self$mvnQuadLMTimes)
-            scaleFactor <- 1.25
-            tBestX0 <- self$tBestX
-            self$scaleM(scaleFactor, print = print)
-            self$genSamplesMVNApprox(scaleFactor^self$mvnQuadLMTimes, print = print)
-            self$fitQuadLM(print = print)
-            modelCheck <- self$checkQuadLM(print = print)
-            if(!modelCheck) {    ## some eigenvalues are positive
-                if(print) message('Expanding linear search grid in direction of each positive eigenvalue')
-                eigA <- eigen(self$quadLMABC$A)
-                evMat <- eigA$vectors
-                reParamCovX <- evMat %*% self$covX %*% t(evMat)   ## this way is correct
-                posInd <- which(eigA$values > 0);   if(length(posInd)==0) stop('')
-                if(print) message('Identified ', length(posInd), ' increasing direction', if(length(posInd)>1) 's' else '')
-                numNewPoints <- 100
-                for(iPosInd in seq_along(posInd)) {
-                    ei <- posInd[iPosInd]
-                    linPoints <- matrix(1:numNewPoints) * sqrt(reParamCovX[ei,ei])/10
-                    newXPoints <- linPoints %*% evMat[,ei] + matrix(1,numNewPoints) %*% self$tBestX
-                    if(self$plot) if(dev.cur()!=1) points(newXPoints[,1], newXPoints[,2], col='purple', pch=18)
-                    if(print) message('Direction ', iPosInd, ': evaluating particle filter on ', numNewPoints, ' new points...')
-                    for(i in 1:numNewPoints) self$cnf$run(newXPoints[i,])
-                }
+        ##
+        ## loop optim
+        ##
+        loopOptim = function(iter = 10, mult = 1, alg = 'optim', print = TRUE) {
+            minPoints <- floor(self$numQLMparams * mult)
+            if(!(alg %in% c('optim', 'PSO'))) stop('unknown algorithm')
+            if(print) message('Loop ', alg, ' until we collect ', minPoints, ' points within ', floor(100*self$trunc), '-percent LRT interval')
+            thisIter <- 0
+            while(self$nPoints < minPoints) {
+                thisIter <- thisIter + iter
+                if(alg=='optim')   self$runOptim(thisIter, print = print)
+                if(alg=='PSO')     self$runPSOptim(thisIter, print = print)
                 self$extractSamples(print = print)
-                ##self$reduceSamples(print = print)  ## a new high value discards all values!
-                self$fitQuadLM(print = print)
-                modelCheck <- self$checkQuadLM(print = print)
-                if(!modelCheck) { if(print) message('No update made to bestX')
-                                  return() }
+                self$setBestFromSamples(print = FALSE)
+                if(print) { message('Best parameter location found thus far:')
+                            print(self$bestX)
+                            message('Best logL found there: ', self$bestY) }
             }
-            self$setBestFromQuadLM(print = print)
-            self$setCovXFromQuadLM(print = print)
-            if(self$plot) if(self$mvnQuadLMTimes %% 2 == 1) {
-                self$plot2D(newPlot = newPlot, col='pink',  bestCol='orange')
-            } else {
-                self$plot2D(newPlot = newPlot, col='black', bestCol='red')
-            }
-            tBestX1 <- self$tBestX
-            delta <- sqrt(sum((tBestX0-tBestX1)^2))
-            if(print) message('Updated bestX distance by: ', delta)
-            ##return(delta)
+            self$setCovXFromSamples(print = print)
+            if(self$plot) self$plot2D()
         },
-        plot2D = function(x, newPlot=TRUE, initCol='yellow', mleCol='green', bestCol='blue', ...) {
+        ##
+        ## MVN cloud
+        ##
+        mvnCloud = function(pointsScale = 10, mScale = 1, print = TRUE) {
+            numPoints <- self$numQLMparams * pointsScale
+            if(print) message('Generating MVN point cloud of ', numPoints, ' points')
+            xNew <- rmvnorm(numPoints, self$tBestX, self$covX)
+            if(print) message('Evaluating particle filter on point cloud...')
+            self$evaluatePFonXarray(xNew, mScale = mScale, print = FALSE)
+            self$extractSamples(print = print)
+            self$setBestFromSamples(print = FALSE)
+            if(self$plot) self$plot2D(newPlot = FALSE, bestDot = FALSE)
+        },
+        ##
+        ## linear grid in directions of positive eigen values
+        ##
+        linearGrid = function(numPoints = 100, print = TRUE) {
+            if(print) message('Expanding linear search grid in direction of each positive eigenvalue')
+            eigA <- eigen(self$quadLMABC$A)
+            evMat <- eigA$vectors
+            reParamCovX <- evMat %*% self$covX %*% t(evMat)   ## this way is correct
+            posInd <- which(eigA$values > 0);   if(length(posInd)==0) stop('')
+            if(print) message('Identified ', length(posInd), ' increasing direction', if(length(posInd)>1) 's' else '')
+            numPoints <- 100
+            for(iPosInd in seq_along(posInd)) {
+                ei <- posInd[iPosInd]
+                linPoints <- matrix(1:numPoints) * sqrt(reParamCovX[ei,ei])/10
+                xNew <- linPoints %*% evMat[,ei] + matrix(1,numPoints) %*% self$tBestX
+                if(self$plot) if(dev.cur()!=1) points(xNew[,1], xNew[,2], col='purple', pch=18)
+                if(print) message('Direction ', iPosInd, ': evaluating particle filter on ', numPoints, ' new points...')
+                self$evaluatePFonXarray(xNew, mScale = 1, print = FALSE)
+            }
+        },
+        plot2D = function(x, newPlot=TRUE, initCol='red', mleCol='green', bestCol='blue', bestDot=TRUE) {
+            self$plot2Dtimes <- self$plot2Dtimes + 1
+            colInd <- (self$plot2Dtimes %% 4) + 5  ## cycles through colors 5,6,7,8
             if(missing(x))  x <- self$x
             if(newPlot) {
                 rng <- apply(x, 2, range)
                 xlim <- c(rng[1,1], rng[2,1])
                 ylim <- c(rng[1,2], rng[2,2])
                 if(!is.null(self$MLE)) {
+                    warning('change the bounds so it over-extends past the MLE')
                     xlim <- c(min(xlim[1], self$tMLE[1]), max(xlim[2], self$tMLE[1]))
                     ylim <- c(min(ylim[1], self$tMLE[2]), max(ylim[2], self$tMLE[2]))
                 }
                 dev.new()
-                plot(x[,1], x[,2], xlab=self$param[1], ylab=self$param[2], xlim=xlim, ylim=ylim, ...)
+                plot(x[,1], x[,2], col=colInd, xlab=self$param[1], ylab=self$param[2], xlim=xlim, ylim=ylim)
             }
-            points(x[,1], x[,2], ...)
+            points(x[,1], x[,2], col=colInd)
             self$addDotAtInit(initCol)
             self$addDotAtMLE(mleCol)
-            self$addDotAtBest(bestCol)
+            if(bestDot) self$addDotAtBest(bestCol)
         },
-        addDotAtInit = function(initCol = 'yellow') {
+        addDotAtInit = function(initCol = 'red') {
             points(self$tInit[1],  self$tInit[2],  pch=19, col=initCol)
         },
         addDotAtMLE = function(mleCol = 'green') {
             if(!is.null(MLE))
                 points(self$tMLE[1], self$tMLE[2], pch=19, col=mleCol)
         },
-        addDotAtBest = function(bestCol = 'pink') {
+        addDotAtBest = function(bestCol = 'blue') {
             points(self$tBestX[1], self$tBestX[2], pch=19, col=bestCol)
         },
         plotProjections = function() {
