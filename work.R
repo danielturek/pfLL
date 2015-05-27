@@ -8,36 +8,38 @@ loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
 #### SSMcorrelated (i=4) right answers: a=?, b=?, sigPN=?, sigPN=?, logL=?
 ##i <- 2;   MLE <- c(0.922695,  1.561002)
 ##i <- 3;   MLE <- c(0.9250784, 1.5130347, 0.1879640)
-i <- 4;   MLE <- c(0.95, 1.0, 0.2, 0.1)   ### NOTE: green point (MLE value) made up
+i <- 4;   MLE <- c(0.95, 1.0, 0.2, 0.1)   ### NOTE: green point (MLE value) is made up
 self <- pfLL(Rmodel, latent, param[1:i], lower[1:i], upper[1:i], init[1:i], trans[1:i], MLE=MLE)
 ##myKF <- function(a,b) KF_ll(list(y=self$Cmodel$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
 
-message('START')
-self$initialPSOInvestigation()
+self$initialPSOInvestigation(0.5)
+
 self$iterMVNapproxQuadLMfit()
-self$iterMVNapproxQuadLMfit()
-self$iterMVNapproxQuadLMfit()
-self$iterMVNapproxQuadLMfit()
-message('FINISH')
 
 
+## trying reParamrerize
+storeSelfX <- self$x
+storeSelfV <- self$v
 
-
-
-
-
+ev <- eigen(self$quadLMABC$A)$vectors
+self$x <- storeSelfX %*% ev
+dimnames(self$x) <- dimnames(storeSelfX)
+self$v <- storeSelfV / storeSelfV
+self$fitQuadLM()
+print(summary(self$quadLM))
+self$checkQuadLM()
+eigen(self$quadLMABC$A)
 
 ## using ppr()
 
-eigen(self$quadLMABC$A)
+## never put this function into use
 
-## never ut this function into use
 fitPPR = function() {
     PPR <- ppr(self$x, matrix(self$y), nterms = self$d, max.terms = self$d)
     print(summary(PPR))
-    par(mfrow = c(self$d,1))
     dev.new()
+    par(mfrow = c(self$d,1))
     plot(PPR)
 },
 

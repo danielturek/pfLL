@@ -231,10 +231,7 @@ pfLLClass <- R6Class(
         setCovXFromSamples = function(print = TRUE) {
             newCov <- cov(self$x)
             self$internalSetCovX(newCov)
-            if(print) { message('Set covX from sample values:')
-                        print(self$covX)
-                        message('Correlation matrix: ')
-                        print(self$getCorX()) }
+            if(print) message('Set covX from sample values')
         },
         getCovX = function() self$covX,
         getCorX = function() cov2cor(self$covX),
@@ -268,7 +265,7 @@ pfLLClass <- R6Class(
             if(print) message('Generating MVN point cloud of ', numMVNPoints, ' points')
             xNew <- rmvnorm(numMVNPoints, self$tBestX, self$covX)
             self$resetSamples(print = FALSE)
-            if(print) cat('Evaluating particle filter on point cloud...\n')
+            if(print) message('Evaluating particle filter on point cloud...')
             for(i in 1:numMVNPoints) self$cnf$run(xNew[i, ])
             self$extractSamples(print = print)
             self$mvnHist[[self$mvnTimes]] <- list(x=self$x, y=self$y, v=self$v)
@@ -313,40 +310,58 @@ pfLLClass <- R6Class(
                         message('Set corresponding bestY: ', self$bestY) }
         },
         setCovXFromQuadLM = function(print = TRUE) {
-            newCov <- -1 * solve(self$quadLMABC$A)
+            newCov <- -1/2 * solve(self$quadLMABC$A)
             self$internalSetCovX(newCov)
-            if(print) { message('Set covX from quadratic linear model fit:')
-                        print(self$covX)
-                        message('Correlation matrix: ')
-                        print(self$getCorX()) }
+            if(print) message('Set covX from quadratic linear model fit')
         },
-        initialPSOInvestigation = function(print = TRUE) {
-            self$genSamplesLoopPSOptim(0.5, print = print)
-            if(self$plot) self$plot2D()
-            self$setCovXFromSamples(print = FALSE)
+        initialPSOInvestigation = function(mult = 0.5, print = TRUE) {
+            self$genSamplesLoopPSOptim(mult, print = print)
+            if(self$plot) self$plot2D(bestCol = 'red')
+            self$setCovXFromSamples(print = print)
         },
         iterMVNapproxQuadLMfit = function(print = TRUE, newPlot = FALSE) {
             self$mvnQuadLMTimes <- self$mvnQuadLMTimes + 1
-            if(print) message('Iteration MVN sample generation and negative-quadratic linear modeling, iteration: ', self$mvnQuadLMTimes)
+            if(print) message('MVN sample generation and negative-quadratic linear modeling, iteration: ', self$mvnQuadLMTimes)
             scaleFactor <- 1.25
             tBestX0 <- self$tBestX
             self$scaleM(scaleFactor, print = print)
             self$genSamplesMVNApprox(scaleFactor^self$mvnQuadLMTimes, print = print)
             self$fitQuadLM(print = print)
-            if(self$checkQuadLM(print = print)) {
-                self$setBestFromQuadLM(print = print)
-                self$setCovXFromQuadLM(print = FALSE)
-                if(self$plot) if(self$mvnQuadLMTimes %% 2 == 1) {
-                    self$plot2D(newPlot = newPlot, col='pink',  bestCol='orange')
-                } else {
-                    self$plot2D(newPlot = newPlot, col='black', bestCol='red')
+            modelCheck <- self$checkQuadLM(print = print)
+            if(!modelCheck) {    ## some eigenvalues are positive
+                if(print) message('Expanding linear search grid in direction of each positive eigenvalue')
+                eigA <- eigen(self$quadLMABC$A)
+                evMat <- eigA$vectors
+                reParamCovX <- evMat %*% self$covX %*% t(evMat)   ## this way is correct
+                posInd <- which(eigA$values > 0);   if(length(posInd)==0) stop('')
+                if(print) message('Identified ', length(posInd), ' increasing direction', if(length(posInd)>1) 's' else '')
+                numNewPoints <- 100
+                for(iPosInd in seq_along(posInd)) {
+                    ei <- posInd[iPosInd]
+                    linPoints <- matrix(1:numNewPoints) * sqrt(reParamCovX[ei,ei])/10
+                    newXPoints <- linPoints %*% evMat[,ei] + matrix(1,numNewPoints) %*% self$tBestX
+                    if(self$plot) if(dev.cur()!=1) points(newXPoints[,1], newXPoints[,2], col='purple', pch=18)
+                    if(print) message('Direction ', iPosInd, ': evaluating particle filter on ', numNewPoints, ' new points...')
+                    for(i in 1:numNewPoints) self$cnf$run(newXPoints[i,])
                 }
-                tBestX1 <- self$tBestX
-                delta <- sqrt(sum((tBestX0-tBestX1)^2))
-                if(print) message('Updated bestX distance by: ', delta)
-                return(delta)
+                self$extractSamples(print = print)
+                ##self$reduceSamples(print = print)  ## a new high value discards all values!
+                self$fitQuadLM(print = print)
+                modelCheck <- self$checkQuadLM(print = print)
+                if(!modelCheck) { if(print) message('No update made to bestX')
+                                  return() }
             }
-            if(print) message('No update made to bestX')
+            self$setBestFromQuadLM(print = print)
+            self$setCovXFromQuadLM(print = print)
+            if(self$plot) if(self$mvnQuadLMTimes %% 2 == 1) {
+                self$plot2D(newPlot = newPlot, col='pink',  bestCol='orange')
+            } else {
+                self$plot2D(newPlot = newPlot, col='black', bestCol='red')
+            }
+            tBestX1 <- self$tBestX
+            delta <- sqrt(sum((tBestX0-tBestX1)^2))
+            if(print) message('Updated bestX distance by: ', delta)
+            ##return(delta)
         },
         plot2D = function(x, newPlot=TRUE, initCol='yellow', mleCol='green', bestCol='blue', ...) {
             if(missing(x))  x <- self$x
@@ -359,7 +374,7 @@ pfLLClass <- R6Class(
                     ylim <- c(min(ylim[1], self$tMLE[2]), max(ylim[2], self$tMLE[2]))
                 }
                 dev.new()
-                plot(x[,1], x[,2], xlab=self$params[1], ylab=self$params[2], xlim=xlim, ylim=ylim, ...)
+                plot(x[,1], x[,2], xlab=self$param[1], ylab=self$param[2], xlim=xlim, ylim=ylim, ...)
             }
             points(x[,1], x[,2], ...)
             self$addDotAtInit(initCol)
