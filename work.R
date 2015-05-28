@@ -1,5 +1,5 @@
 
-rm(list=ls())
+##rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
 ##loadData('SSMindependent')  ## true values: mu=20, b=1, sigPN=0.2, sigOE=0.05
 loadData('SSMcorrelated')   ## true values: a=.95, b=1, sigPN=0.2, sigOE=0.05
@@ -116,6 +116,7 @@ self$CpfLLnf$setM(100000)
 x1 <- c(0.942619, 1.156373)  ## this is what pfLL() algo finds always (SSMcorrelated, i=2)
 x2 <- c(0.8871102, 2.2625421) ## this is the maximum that KF_ll() aka mfKF() finds
 
+
 thisXpoint <- x2   ## just change this!!
 
 myKF(thisXpoint[1], thisXpoint[2])
@@ -154,8 +155,8 @@ l1
 ## figuring out why the surfaces are fitting poorly
 ## some really cool 3D plots in here!
 
-rm(list=ls())
-source('~/GitHub/pfLL/pfLL.R')
+##rm(list=ls())
+psource('~/GitHub/pfLL/pfLL.R')
 model <- 'SSMcorrelated'
 loadData(model)
 library(plot3D)
@@ -164,13 +165,14 @@ myKF <- function(a,b) KF_ll(list(y=data$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
 
 a <- seq(0.86,0.98,by=0.002)
 b <- seq(0.4,2.8,by=0.02)
+ll <- outer(a, b, FUN = myKF)
+llsave <- ll
 M <- mesh(a, b)
 x <- M$x
 y <- M$y
-ll <- array(NA, dim(x))
-for(i in 1:dim(x)[1]) for(j in 1:dim(x)[2]) ll[i,j] <- myKF(a[i],b[j])
-##for(i in 1:dim(x)[1]) for(j in 1:dim(x)[2]) ll[i,j] <- self$CpfLLnf$run(c(mu[i],b[j]))
-llsave <- ll
+
+contour(a, b, ll, nlevels=200)
+
 
 minn <- 18
 ll[ll<minn] <- minn
@@ -234,8 +236,10 @@ paramT
 logL
 ##[1] 19.09287
 
+
 ## let's see how these LM predictions compare to our actual data
 newMin <- 18.9
+newMin <- 17
 imax <- which(ll>newMin)
 length(imax)
 xTop <- x[imax]
@@ -252,21 +256,28 @@ apply(ddd, 2, mean)
 ## 0.91900  1.64000 18.97373 
 ## answer: very well!
 
-optimInit <- c(0.942619, 1.156373)
-myKFoptim <- function(ab) myKF(ab[1], ab[2])
-optimOut <- optim(optimInit, myKFoptim, control=list(fnscale=-1))
-optimOut$convergence
-optimOut$par
-##[1] 0.922695 1.561002
-optimOut$value
-##[1] 19.09538
 
-## here's for SSMcorrelated (i=3) with sigPN on log-scale
+
+## finding the "right" answers for SSMcorrelated, using optim()
+
+## SSMcorrelated (i=2)
 rm(list=ls())
 source('~/GitHub/pfLL/pfLL.R')
-model <- 'SSMcorrelated'
-loadData(model)
-library(plot3D)
+loadData('SSMcorrelated')
+myKF2 <- function(a,b) KF_ll(list(y=data$y, sigOE=0.05, sigPN=0.2, a=a, b=b))
+optimInit2 <- c(0.942619, 1.156373)
+myKFoptim2 <- function(ab) myKF2(ab[1], ab[2])
+optimOut2 <- optim(optimInit2, myKFoptim2, control=list(fnscale=-1))
+optimOut2$convergence
+optimOut2$par
+##[1] 0.922695 1.561002
+optimOut2$value
+##[1] 19.09538
+
+## SSMcorrelated (i=3) with sigPN on log-scale
+rm(list=ls())
+source('~/GitHub/pfLL/pfLL.R')
+loadData('SSMcorrelated')
 myKF3 <- function(a,b,logsigPN) KF_ll(list(y=data$y, sigOE=0.05, sigPN=exp(logsigPN), a=a, b=b))
 optimInit3 <- c(0.922695, 1.561002, log(0.2))
 myKFoptim3 <- function(abLPN) myKF3(abLPN[1], abLPN[2], abLPN[3])
@@ -277,6 +288,23 @@ c(par3[1], par3[2], exp(par3[3]))
 ## 0.9250784 1.5130347 0.1879640
 optimOut3$value
 ##[1] 19.4043
+
+## SSMcorrelated (i=4) with sigPN and sigOE on log-scale
+rm(list=ls())
+source('~/GitHub/pfLL/pfLL.R')
+loadData('SSMcorrelated')
+myKF4 <- function(a,b,logsigPN,logsigOE) KF_ll(list(y=data$y, sigOE=exp(logsigOE), sigPN=exp(logsigPN), a=a, b=b))
+optimInit4 <- c(0.922695, 1.561002, log(0.2), log(0.05))
+myKFoptim4 <- function(abLPNLOE) myKF4(abLPNLOE[1], abLPNLOE[2], abLPNLOE[3], abLPNLOE[4])
+optimOut4 <- optim(optimInit4, myKFoptim4, control=list(fnscale=-1))
+optimOut4$convergence
+par4 <- optimOut4$par
+c(par4[1], par4[2], exp(par4[3]), exp(par4[4]))
+## 9.190980e-01 1.633285e+00 1.955246e-01 1.475635e-05
+optimOut4$value
+## [1] 20.38073
+
+
 
 ## developing MVN simulation for a new cloud of points
 
